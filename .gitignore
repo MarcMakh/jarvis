@@ -1,0 +1,12 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# secrets & local state
+.env
+data/voice_cache/
+
+# generated
+static/jarvis.ico
+.playwright-mcp/

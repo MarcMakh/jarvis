@@ -1,0 +1,54 @@
+# JARVIS configuration. Edit and restart, or hot-reload from the dashboard.
+
+[identity]
+name = "JARVIS"
+# How JARVIS addresses you. Classic JARVIS uses "sir".
+honorific = "sir"
+
+[voice]
+enabled = true
+# Any edge-tts voice. en-GB-RyanNeural = calm British male (very JARVIS).
+# Alternatives: en-GB-ThomasNeural, en-US-GuyNeural, en-AU-WilliamNeural
+voice = "en-GB-RyanNeural"
+rate = "-4%"     # slightly slower = more deliberate
+pitch = "-2Hz"
+greet_on_start = true
+
+[brain]
+enabled = true
+# "auto" = use ANTHROPIC_API_KEY via SDK if set, else fall back to the claude CLI
+# (which uses your existing Claude Code subscription auth, no API key needed).
+# Force a mode with "sdk" or "cli".
+mode = "auto"
+# Model used when going through the anthropic SDK (API key path).
+sdk_model = "claude-sonnet-4-6"
+# Model used when going through the claude CLI.
+cli_model = "sonnet"
+
+[obsidian]
+vault = 'C:\Users\markj\Documents\Obsidian Vault'
+# JARVIS writes a daily system snapshot here (folder created if missing).
+log_folder = "JARVIS Logs"
+
+[projects]
+# JARVIS auto-discovers every project under these roots — create a new project
+# in any of them and it appears in the HUD on the next refresh, no config needed.
+roots = [
+    'C:\Users\markj\Documents\PythonProjects',
+    'C:\Users\markj\source\repos',
+]
+
+[server]
+host = "127.0.0.1"
+port = 7717
+open_browser = true
+poll_seconds = 20
+
+[connectors]
+# Extra CLIs JARVIS should watch for and report on, beyond the built-ins.
+# Built-ins already covered: claude, hermes, openclaw.
+watch = ["claude", "hermes", "openclaw", "git", "gh", "uv", "ruff", "pyright", "pandoc", "rg"]
+# Path to your Hermes skills repo. JARVIS enumerates skills (folders with SKILL.md),
+# reports the git branch, and lights up the connector. Leave blank to rely on a
+# `hermes` CLI on PATH or a hermes-named folder in PythonProjects.
+hermes_path = 'C:\Users\markj\source\repos\hermes-skills'

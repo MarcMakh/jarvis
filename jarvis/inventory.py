@@ -1,0 +1,154 @@
+"""Scans the machine for runtimes, dev tools, Python packages, and live system stats."""
+
+from __future__ import annotations
+
+import re
+import sys
+from typing import Any
+
+from .util import first_line, run, which
+
+# Tools JARVIS knows how to version-probe. Each entry: (label, exe, version-args).
+_DEV_TOOLS: list[tuple[str, str, list[str]]] = [
+    ("Git", "git", ["--version"]),
+    ("GitHub CLI", "gh", ["--version"]),
+    ("ripgrep", "rg", ["--version"]),
+    ("Pandoc", "pandoc", ["--version"]),
+    ("ruff", "ruff", ["--version"]),
+    ("Pyright", "pyright", ["--version"]),
+    ("VS Code", "code", ["--version"]),
+    ("Docker", "docker", ["--version"]),
+]
+
+# Python packages worth surfacing (installed status + version).
+_KEY_PACKAGES = [
+    "anthropic",
+    "edge-tts",
+    "fastapi",
+    "uvicorn",
+    "psutil",
+    "httpx",
+    "pydantic",
+    "requests",
+    "rich",
+    "openai",
+    "mcp",
+]
+
+_VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?(?:[.\-]\w+)*)")
+
+
+def _ver_from(text: str) -> str:
+    m = _VERSION_RE.search(text)
+    return m.group(1) if m else first_line(text)
+
+
+def _probe(label: str, exe: str, args: list[str]) -> dict[str, Any]:
+    path = which(exe)
+    if not path:
+        return {"label": label, "name": exe, "present": False, "version": None, "path": None}
+    res = run([path, *args], timeout=12)
+    return {
+        "label": label,
+        "name": exe,
+        "present": True,
+        "version": _ver_from(res.text) if res.ok else None,
+        "path": path,
+    }
+
+
+def scan_runtimes() -> list[dict[str, Any]]:
+    """Python interpreters, uv, Node, npm."""
+    items: list[dict[str, Any]] = []
+
+    # Active interpreter (the one running JARVIS)
+    items.append(
+        {
+            "label": "Python (active)",
+            "name": "python",
+            "present": True,
+            "version": "%d.%d.%d" % sys.version_info[:3],
+            "path": sys.executable,
+        }
+    )
+
+    # All Python versions known to the py launcher
+    py = which("py")
+    if py:
+        res = run([py, "--list"], timeout=10)
+        for line in res.out.splitlines():
+            m = re.search(r"-V:(\S+)\s+\*?\s*(.*)", line.strip())
+            if m:
+                items.append(
+                    {
+                        "label": f"Python {m.group(1)}",
+                        "name": "py",
+                        "present": True,
+                        "version": _ver_from(m.group(2)) or m.group(1),
+                        "path": "py launcher",
+                    }
+                )
+
+    for label, exe, args in [
+        ("uv", "uv", ["--version"]),
+        ("Node.js", "node", ["--version"]),
+        ("npm", "npm", ["--version"]),
+        ("pip", "pip", ["--version"]),
+    ]:
+        items.append(_probe(label, exe, args))
+
+    return items
+
+
+def scan_dev_tools() -> list[dict[str, Any]]:
+    return [_probe(label, exe, args) for label, exe, args in _DEV_TOOLS]
+
+
+def scan_packages() -> list[dict[str, Any]]:
+    """Installed versions of key Python packages, via importlib.metadata."""
+    from importlib import metadata
+
+    out: list[dict[str, Any]] = []
+    for name in _KEY_PACKAGES:
+        try:
+            ver = metadata.version(name)
+            out.append({"name": name, "present": True, "version": ver})
+        except metadata.PackageNotFoundError:
+            out.append({"name": name, "present": False, "version": None})
+    return out
+
+
+def system_stats() -> dict[str, Any]:
+    """Live CPU / memory / disk for the HUD gauges."""
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        disk = psutil.disk_usage("C:\\" if sys.platform == "win32" else "/")
+        boot = psutil.boot_time()
+        import time
+
+        uptime_s = int(time.time() - boot)
+        return {
+            "ok": True,
+            "cpu_pct": psutil.cpu_percent(interval=0.15),
+            "cpu_cores": psutil.cpu_count(logical=True),
+            "mem_pct": vm.percent,
+            "mem_used_gb": round(vm.used / 1e9, 1),
+            "mem_total_gb": round(vm.total / 1e9, 1),
+            "disk_pct": disk.percent,
+            "disk_free_gb": round(disk.free / 1e9, 1),
+            "disk_total_gb": round(disk.total / 1e9, 1),
+            "uptime_h": round(uptime_s / 3600, 1),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def collect() -> dict[str, Any]:
+    return {
+        "runtimes": scan_runtimes(),
+        "dev_tools": scan_dev_tools(),
+        "packages": scan_packages(),
+        "system": system_stats(),
+    }

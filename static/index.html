@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>J.A.R.V.I.S</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2346d6ff' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%237fe3ff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/jarvis.css" />
+</head>
+<body>
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="reactor" id="reactor"></span>
+      <h1 class="wordmark">J<i>·</i>A<i>·</i>R<i>·</i>V<i>·</i>I<i>·</i>S</h1>
+      <span class="status-pill" id="statusPill"><span class="dot"></span> online</span>
+    </div>
+    <div class="meta">
+      <span id="clock" class="clock">--:--:--</span>
+      <span id="version" class="ver">v—</span>
+      <button id="muteBtn" class="ghost-btn" title="Toggle voice">🔊</button>
+      <button id="refreshBtn" class="ghost-btn" title="Refresh all">⟳</button>
+    </div>
+  </header>
+
+  <section class="gauges">
+    <div class="gauge" id="g-cpu">
+      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
+      <div class="gauge-label"><b id="cpuVal">—</b><small>CPU</small></div>
+    </div>
+    <div class="gauge" id="g-mem">
+      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
+      <div class="gauge-label"><b id="memVal">—</b><small>MEM</small></div>
+    </div>
+    <div class="gauge" id="g-disk">
+      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
+      <div class="gauge-label"><b id="diskVal">—</b><small>DISK C:</small></div>
+    </div>
+    <div class="readout" id="readout">
+      <div><span>HOST UPTIME</span><b id="uptime">—</b></div>
+      <div><span>MEMORY</span><b id="memDetail">—</b></div>
+      <div><span>DISK FREE</span><b id="diskDetail">—</b></div>
+      <div><span>CORES</span><b id="cores">—</b></div>
+    </div>
+  </section>
+
+  <main class="grid">
+    <article class="card" id="card-runtimes">
+      <h2>⚙ Runtimes</h2><div class="body" id="runtimes"></div>
+    </article>
+
+    <article class="card" id="card-tools">
+      <h2>🛠 Dev Tools</h2><div class="body" id="tools"></div>
+    </article>
+
+    <article class="card span2" id="card-connectors">
+      <h2>🧠 AI Connectors <span class="hint">Claude · MCP · Hermes · OpenClaw</span></h2>
+      <div class="body" id="connectors"></div>
+    </article>
+
+    <article class="card" id="card-updates">
+      <h2>⬆ Updates <button class="mini-btn" id="checkUpdatesBtn">check</button></h2>
+      <div class="body" id="updates"><div class="muted">Click "check" to scan for updates.</div></div>
+    </article>
+
+    <article class="card" id="card-obsidian">
+      <h2>📓 Obsidian <button class="mini-btn" id="snapshotBtn">snapshot</button></h2>
+      <div class="body" id="obsidian"></div>
+      <div class="ob-search">
+        <input id="obQuery" placeholder="search vault…" />
+        <div id="obResults" class="ob-results"></div>
+      </div>
+    </article>
+
+    <article class="card span2" id="card-projects">
+      <h2>📁 Project Ecosystem</h2><div class="body proj-grid" id="projects"></div>
+    </article>
+  </main>
+
+  <section class="console">
+    <div class="console-head">
+      <span class="prompt">▸ ask JARVIS <span class="brain-pill" id="brainPill">brain ?</span></span>
+      <label class="speak-toggle"><input type="checkbox" id="speakAnswers" checked /> speak replies</label>
+    </div>
+    <div class="console-io" id="consoleIO"></div>
+    <form id="askForm" class="ask-row">
+      <input id="askInput" autocomplete="off" placeholder="e.g. what needs updating? · what's the state of my MCP servers?" />
+      <button type="submit" id="askBtn">send</button>
+    </form>
+  </section>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" id="modal">
+      <span class="close" id="modalClose">×</span>
+      <h3 id="modalTitle">—</h3>
+      <div class="modal-sub" id="modalSub"></div>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <audio id="player"></audio>
+  <script src="/static/jarvis.js"></script>
+</body>
+</html>
