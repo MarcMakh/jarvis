@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, brain, connectors, inventory, updater
+from . import __version__, brain, connectors, graph, inventory, launcher, updater
 from .obsidian import Obsidian
 from .util import load_config, load_env
 from .voice import Voice
@@ -73,6 +73,15 @@ store = StateStore()
 
 def create_app() -> FastAPI:
     app = FastAPI(title="JARVIS", version=__version__)
+
+    @app.middleware("http")
+    async def _no_store(request, call_next):
+        # JARVIS is a single-user local dashboard; never let the browser serve a
+        # stale index.html/jarvis.js (that hid the graph after upgrades).
+        resp = await call_next(request)
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
+
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     @app.get("/")
@@ -118,6 +127,61 @@ def create_app() -> FastAPI:
     @app.get("/api/project")
     def api_project(path: str = "") -> JSONResponse:
         return JSONResponse(connectors.project_detail(path))
+
+    @app.get("/api/graph")
+    def api_graph() -> JSONResponse:
+        return JSONResponse(graph.build(store.get()))
+
+    @app.post("/api/launch")
+    async def api_launch(request: Request) -> JSONResponse:
+        body = await request.json() or {}
+        kind = body.get("kind")
+        if kind == "terminal":
+            return JSONResponse(launcher.launch_terminal(body.get("target", "")))
+        if kind == "app":
+            return JSONResponse(launcher.launch_app(body.get("path", "")))
+        if kind == "obsidian":
+            return JSONResponse(launcher.launch_obsidian())
+        return JSONResponse({"ok": False, "error": "unknown launch kind"})
+
+    @app.get("/api/run-info")
+    def api_run_info(path: str = "") -> JSONResponse:
+        """Whether a project has a detectable runnable app (drives the Run button)."""
+        from pathlib import Path
+
+        plan = launcher.detect_run(Path(path)) if path else None
+        return JSONResponse({"runnable": bool(plan), "label": plan["label"] if plan else None})
+
+    def _open_with_os(path: str, must_be_file: bool) -> dict[str, Any]:
+        import os
+        from pathlib import Path
+
+        from .launcher import _under_roots
+
+        p = Path(path)
+        ok_kind = p.is_file() if must_be_file else p.is_dir()
+        if not ok_kind or not _under_roots(p):
+            return {"ok": False, "error": "path not allowed"}
+        try:
+            if os.name == "nt":
+                os.startfile(str(p))  # type: ignore[attr-defined]
+            else:
+                import subprocess
+
+                subprocess.Popen(["xdg-open", str(p)])
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @app.post("/api/open/doc")
+    async def api_open_doc(request: Request) -> JSONResponse:
+        body = await request.json() or {}
+        return JSONResponse(_open_with_os(body.get("path", ""), must_be_file=True))
+
+    @app.post("/api/open/folder")
+    async def api_open_folder(request: Request) -> JSONResponse:
+        body = await request.json() or {}
+        return JSONResponse(_open_with_os(body.get("path", ""), must_be_file=False))
 
     @app.post("/api/open/code")
     async def api_open_code(request: Request) -> JSONResponse:

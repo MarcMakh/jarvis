@@ -6,6 +6,7 @@ __pycache__/
 # secrets & local state
 .env
 data/voice_cache/
+data/app_profile/
 
 # generated
 static/jarvis.ico

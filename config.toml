@@ -38,6 +38,13 @@ roots = [
     'C:\Users\markj\source\repos',
 ]
 
+# Per-project overrides (keyed by folder name). Paths are relative to the project.
+#   docs_path = where to draw supporting documents from (instead of the root)
+#   run_path  = the sub-folder whose app the top-level "Run" button launches
+[projects.overrides.QuantFin]
+docs_path = "trading_architecture/notebooks"
+run_path = "trading_architecture"
+
 [server]
 host = "127.0.0.1"
 port = 7717

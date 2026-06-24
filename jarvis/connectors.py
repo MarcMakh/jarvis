@@ -282,4 +282,96 @@ def project_detail(path: str) -> dict[str, Any]:
     except Exception:
         info["file_count"] = None
     info["has_venv"] = (p / ".venv").exists() or (p / "venv").exists()
+
+    overrides = ((load_config().get("projects", {}) or {}).get("overrides", {}) or {}).get(p.name, {})
+
+    # Supporting documents — from an override folder if configured, else the project.
+    docs_root = p
+    if overrides.get("docs_path"):
+        cand = p / overrides["docs_path"]
+        if cand.exists():
+            docs_root = cand
+    info["docs"] = _scan_docs(docs_root, rel_base=p)
+    info["docs_source"] = None if docs_root == p else str(docs_root.relative_to(p)).replace("\\", "/")
+
+    # Runnable app — honour a run_path override (e.g. QuantFin -> trading_architecture).
+    from .launcher import detect_run
+
+    run_base = p
+    if overrides.get("run_path"):
+        cand = p / overrides["run_path"]
+        if cand.exists():
+            run_base = cand
+    plan = detect_run(run_base)
+    info["runnable"] = bool(plan)
+    info["run_label"] = plan["label"] if plan else None
+    info["run_path"] = str(run_base) if plan else None
+
+    info["subprojects"] = _scan_subprojects(p)
     return info
+
+
+_SKIP_SUBDIRS = {"__pycache__", ".venv", "venv", "node_modules", ".git", ".ruff_cache", "data"}
+
+
+def _scan_subprojects(p: Path) -> list[dict[str, Any]]:
+    """Immediate sub-folders that look like their own project (have code/launchers),
+    each with run/open info — lets QuantFin's project_01…project_NN and the
+    trading_architecture app be launched straight from the drill-down."""
+    from .launcher import detect_run
+
+    subs: list[dict[str, Any]] = []
+    for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+        if not child.is_dir() or child.name.startswith(".") or child.name in _SKIP_SUBDIRS:
+            continue
+        has_code = (
+            any(child.glob("*.py")) or any(child.glob("*.bat")) or any(child.glob("*.ipynb"))
+            or (child / "pyproject.toml").exists() or (child / "package.json").exists()
+        )
+        if not has_code:
+            continue
+        plan = detect_run(child)
+        subs.append(
+            {
+                "name": child.name,
+                "path": str(child),
+                "runnable": bool(plan),
+                "run_label": plan["label"] if plan else None,
+            }
+        )
+    return subs[:30]
+
+
+_DOC_EXTS = {".md", ".docx", ".pdf", ".txt", ".rst", ".doc", ".pptx", ".xlsx"}
+_DOC_DIRS = ("docs", "Documentation", "doc", "Docs", "documentation")
+
+
+def _scan_docs(root: Path, rel_base: Path | None = None) -> list[dict[str, Any]]:
+    """Supporting documents under `root`: top-level docs plus any docs/ subfolder.
+    `rel_base` is the project root used for display paths (so an override docs
+    folder still shows a path relative to the project)."""
+    rel_base = rel_base or root
+    candidates: list[Path] = [f for f in root.glob("*") if f.is_file()]
+    for sub in _DOC_DIRS:
+        d = root / sub
+        if d.exists():
+            candidates += [f for f in d.rglob("*") if f.is_file()]
+    docs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for f in candidates:
+        if f.suffix.lower() not in _DOC_EXTS:
+            continue
+        if f.name.lower() in ("readme.md", "readme.txt"):
+            continue  # README already shown separately
+        try:
+            rel = str(f.relative_to(rel_base))
+        except ValueError:
+            rel = f.name
+        if rel in seen:
+            continue
+        seen.add(rel)
+        docs.append(
+            {"name": f.stem, "rel": rel, "path": str(f), "ext": f.suffix.lower().lstrip(".")}
+        )
+    docs.sort(key=lambda d: d["rel"].lower())
+    return docs[:24]

@@ -4,22 +4,50 @@ const player = $("player");
 let voiceOn = true;
 let pollSeconds = 20;
 let lastState = null;
+let pendingGreet = null; // greeting deferred until the first user gesture (autoplay)
 
 // ---------- voice ----------
+// Returns true only if audio actually started (so callers can defer on autoplay block).
 async function speak(text) {
-  if (!voiceOn || !text) return;
+  if (!voiceOn || !text) return false;
   try {
     const r = await fetch("/api/speak", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    if (r.status === 204) return;
+    if (r.status === 204) return false;
     const blob = await r.blob();
     player.src = URL.createObjectURL(blob);
-    await player.play().catch(() => {});
-  } catch (e) { /* voice is best-effort */ }
+    await player.play(); // rejects if autoplay is blocked
+    return true;
+  } catch (e) {
+    return false; // most often: browser blocked autoplay before a user gesture
+  }
 }
+
+function showVoiceCue() {
+  if ($("voiceCue")) return;
+  const el = document.createElement("div");
+  el.id = "voiceCue"; el.className = "voice-cue";
+  el.innerHTML = `<span class="cue-dot"></span> 🔊 Click to enable JARVIS voice`;
+  el.addEventListener("click", unlockAudio);
+  document.body.appendChild(el);
+}
+function hideVoiceCue() { const el = $("voiceCue"); if (el) el.remove(); }
+
+// First real user gesture unlocks audio; flush any greeting that was blocked.
+function unlockAudio() {
+  const btn = $("muteBtn");
+  if (btn) btn.classList.remove("need-audio");
+  hideVoiceCue();
+  if (pendingGreet) {
+    const t = pendingGreet; pendingGreet = null;
+    speak(t);
+  }
+}
+["pointerdown", "keydown"].forEach((ev) =>
+  window.addEventListener(ev, unlockAudio, { once: true }));
 
 // ---------- helpers ----------
 function led(status) {
@@ -90,6 +118,12 @@ function renderConnectors(conn) {
         <span class="name">skill · ${s.name}</span>
         <span class="ver">${s.category}</span></div>`).join("");
   }
+  const ob = (lastState && lastState.obsidian) || {};
+  html += `<div class="row clickable" data-kind="conn" data-name="obsidian">
+    <span class="led ${ob.available ? "on" : "off"}"></span>
+    <span class="name">Obsidian <span class="muted">brain</span></span>
+    <span class="ver ${ob.available ? "" : "miss"}">${ob.available ? ob.notes + " notes" : "not linked"}</span>
+    <span class="drill">details ›</span></div>`;
   const oc = conn.openclaw;
   html += `<div class="row clickable" data-kind="conn" data-name="openclaw">
     <span class="led ${led(oc.status)}"></span>
@@ -289,11 +323,16 @@ function handleDrill(ds) {
     const hit = w && (w.items || []).find((i) => (i.label || i.name).toLowerCase().includes((it.label || "").toLowerCase()));
     if (hit) upd = `<div class="section-title">Update available</div>
       <div class="chip-row"><span class="chip">${esc(hit.current)} → ${esc(hit.latest)}</span></div>
-      <button class="act-btn" onclick="applyToolUpgrade('${esc(hit.id)}', this)">update via winget</button>`;
+      <button class="act-btn" data-act="winget" data-id="${esc(hit.id)}">update via winget</button>`;
+    let run = "";
+    if (it.present && launchable.has(it.name))
+      run = `<button class="act-btn" data-act="launch-term" data-target="${esc(it.name)}" data-label="${esc(it.name)}">▶ launch ${esc(it.name)}</button>`;
+    if (it.name === "code" && it.present)
+      run = `<button class="act-btn" data-act="launch-term" data-target="code" data-label="VS Code">▶ open VS Code</button>`;
     openModal(it.label || it.name, it.present ? "installed" : "not installed", kv([
       ["Name", it.label || it.name], ["Version", it.version || "—"],
       ["Status", it.present ? "present" : "missing"], ["Path", it.path || "—"],
-    ]) + upd);
+    ]) + (run ? `<div style="margin:6px 0 12px">${run}</div>` : "") + upd);
   } else if (ds.kind === "mcp") {
     const m = lastState.connectors.mcp_servers.find((x) => x.name === ds.name);
     if (!m) return;
@@ -309,14 +348,22 @@ function handleDrill(ds) {
       openModal("Claude Code", "AI CLI", kv([
         ["Version", "v" + conn.claude.version], ["Status", conn.claude.status],
         ["Path", conn.claude.path], ["MCP servers", `${d.mcp_online}/${d.mcp_count} online`],
-      ]));
+      ]) + `<div style="margin-top:10px"><button class="act-btn" data-act="launch-term" data-target="claude" data-label="Claude">▶ open Claude terminal</button></div>`);
     } else if (ds.name === "hermes") {
       const h = conn.hermes;
       const skills = (h.skills || []).map((s) =>
         `<div class="commit">• <b>${esc(s.name)}</b> <span class="muted">(${esc(s.category)})</span></div>`).join("");
+      const act = h.path ? `<div style="margin-top:10px">
+        <button class="act-btn" data-act="open-code" data-path="${esc(h.path)}">▶ open in VS Code</button>
+        <button class="act-btn" data-act="open-folder" data-path="${esc(h.path)}">▶ open folder</button></div>` : "";
       openModal("Hermes", "AI skills framework", kv([
         ["Status", h.status], ["Branch", h.branch], ["Path", h.path], ["Skills", (h.skills || []).length],
-      ]) + (skills ? `<div class="section-title">Skills</div>${skills}` : ""));
+      ]) + (skills ? `<div class="section-title">Skills</div>${skills}` : "") + act);
+    } else if (ds.name === "obsidian") {
+      const ob = lastState.obsidian;
+      openModal("Obsidian", "knowledge brain", kv([
+        ["Status", ob.available ? "linked" : "not linked"], ["Notes", ob.notes], ["Vault", ob.vault],
+      ]) + (ob.available ? `<div style="margin-top:10px"><button class="act-btn" data-act="launch-obsidian">▶ open Obsidian</button></div>` : ""));
     } else if (ds.name === "openclaw") {
       const o = conn.openclaw;
       openModal("OpenClaw", "AI framework", kv([
@@ -351,7 +398,38 @@ async function openProjectDetail(path) {
     if (d.commits && d.commits.length)
       body += `<div class="section-title">Recent commits</div>` +
         d.commits.map((c) => `<div class="commit">${esc(c)}</div>`).join("");
-    body += `<div style="margin-top:14px"><button class="act-btn" onclick="openInCode('${esc(path)}')">open in VS Code</button></div>`;
+    // actions
+    body += `<div class="act-row" style="margin-top:14px">`;
+    if (d.runnable)
+      body += `<button class="act-btn" data-act="run-app" data-path="${esc(d.run_path || d.path)}" data-label="${esc(d.run_label || "app")}">▶ run app${d.run_label ? " · " + esc(d.run_label) : ""}</button>`;
+    body += `<button class="act-btn" data-act="open-code" data-path="${esc(d.path)}">open in VS Code</button>`;
+    body += `<button class="act-btn" data-act="open-folder" data-path="${esc(d.path)}">open folder</button></div>`;
+    // sub-projects (each independently runnable / openable)
+    if (d.subprojects && d.subprojects.length) {
+      body += `<div class="section-title">📦 Sub-projects (${d.subprojects.length})</div><div class="doc-list">`;
+      body += d.subprojects.map((s) =>
+        `<div class="subproj">
+           <span class="led ${s.runnable ? "on" : "off"}"></span>
+           <span class="doc-name">${esc(s.name)}</span>
+           <span class="sp-actions">
+             ${s.runnable ? `<button class="mini-btn" data-act="run-app" data-path="${esc(s.path)}" data-label="${esc(s.run_label || s.name)}">▶ run</button>` : ""}
+             <button class="mini-btn" data-act="open-code" data-path="${esc(s.path)}">code</button>
+             <button class="mini-btn" data-act="open-folder" data-path="${esc(s.path)}">folder</button>
+           </span>
+         </div>`).join("");
+      body += `</div>`;
+    }
+    // supporting documents
+    if (d.docs && d.docs.length) {
+      const src = d.docs_source ? ` <span class="muted" style="font-size:10px;text-transform:none;letter-spacing:0">from ${esc(d.docs_source)}</span>` : "";
+      body += `<div class="section-title">📄 Supporting documents (${d.docs.length})${src}</div><div class="doc-list">`;
+      body += d.docs.map((doc) =>
+        `<div class="doc-item" data-act="open-doc" data-path="${esc(doc.path)}">
+           <span class="doc-ext doc-${esc(doc.ext)}">${esc(doc.ext)}</span>
+           <span class="doc-name">${esc(doc.name)}</span>
+           <span class="drill">open ›</span></div>`).join("");
+      body += `</div>`;
+    }
     if (d.readme)
       body += `<div class="section-title">README</div><pre>${esc(d.readme)}</pre>`;
     openModal(d.name, d.path, body);
@@ -366,7 +444,7 @@ async function openWingetAll() {
       ? rows.map((r) => `<div class="update-line">
           <span class="name">${esc(r.name)}</span>
           <span class="muted">${esc(r.current)}→${esc(r.latest)}</span>
-          <button class="mini-btn" onclick="applyToolUpgrade('${esc(r.id)}', this)">update</button></div>`).join("")
+          <button class="mini-btn" data-act="winget" data-id="${esc(r.id)}">update</button></div>`).join("")
       : `<div class="muted">Everything is up to date.</div>`;
     openModal("All system updates", `${rows.length} packages`, body);
   } catch (e) { openModal("System updates", "winget", `<div class="muted">Error.</div>`); }
@@ -379,6 +457,39 @@ function openInCode(path) {
   }).then((r) => r.json()).then((res) =>
     printMsg("jarvis", res.ok ? "Opening in VS Code, sir." : "Couldn't open VS Code: " + (res.error || "")));
 }
+
+function postPath(url, path, okMsg) {
+  fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  }).then((r) => r.json()).then((res) =>
+    printMsg("jarvis", res.ok ? okMsg : "Couldn't open: " + (res.error || "")));
+}
+
+// Delegated actions for modal buttons — data-attributes avoid embedding Windows
+// paths in inline JS (backslashes were corrupting paths in onclick handlers).
+function handleAct(ds, el) {
+  switch (ds.act) {
+    case "run-app": launch("app", { path: ds.path }, ds.label || "app"); break;
+    case "open-code": openInCode(ds.path); break;
+    case "open-folder": postPath("/api/open/folder", ds.path, "Opening folder, sir."); break;
+    case "open-doc": postPath("/api/open/doc", ds.path, "Opening document, sir."); break;
+    case "launch-term": launch("terminal", { target: ds.target }, ds.label || ds.target); break;
+    case "launch-obsidian": launch("obsidian", {}, "Obsidian"); break;
+    case "winget": applyToolUpgrade(ds.id, el); break;
+  }
+}
+
+// generic launch: kind = "terminal" | "app" | "obsidian"
+function launch(kind, extra, label) {
+  printMsg("jarvis", `Launching ${label || kind}, sir.`);
+  fetch("/api/launch", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, ...extra }),
+  }).then((r) => r.json()).then((res) =>
+    printMsg("jarvis", res.ok ? `Launched ${res.plan || res.launched || label}.` : `Launch failed: ${res.error}`));
+}
+const launchable = new Set(["python", "node", "claude", "uv", "gh"]);
 
 // ---------- obsidian search ----------
 let searchTimer;
@@ -394,6 +505,188 @@ function setupSearch() {
         ? hits.map((h) => `<div class="hit"><b>${h.title}</b><small>${h.snippet || h.rel}</small></div>`).join("")
         : `<div class="muted">no matches</div>`;
     }, 250);
+  });
+}
+
+// ---------- ecosystem force graph ----------
+const GROUP_COLORS = {
+  core: "#ff7ab6", ai: "#46d6ff", mcp: "#4dffb0", mcp_err: "#ff5d6c",
+  brain: "#b794ff", note: "#8a7dff", skill: "#ffd24d", runtime: "#5ad1ff",
+  tool: "#ffa94d", hub: "#cfe9f5", project: "#ff9bd0", absent: "#44606e",
+};
+const G = {
+  canvas: null, ctx: null, dpr: 1, w: 0, h: 0,
+  nodes: [], links: [], byId: {}, adj: {},
+  hover: null, drag: null, mouse: { x: -1, y: -1 }, down: null, raf: null,
+};
+
+function recenterNodes() {
+  const cx = G.w / 2, cy = G.h / 2;
+  for (const n of G.nodes) {
+    n.x = cx + (Math.random() - 0.5) * Math.min(520, G.w * 0.6);
+    n.y = cy + (Math.random() - 0.5) * Math.min(260, G.h * 0.6);
+    n.vx = n.vy = 0;
+  }
+  if (G.byId["jarvis"]) { G.byId["jarvis"].x = cx; G.byId["jarvis"].y = cy; }
+}
+
+function gResize() {
+  const c = G.canvas;
+  if (!c) return;
+  const rect = c.getBoundingClientRect();
+  const hadSize = G.w > 0 && G.h > 0;
+  G.dpr = window.devicePixelRatio || 1;
+  G.w = rect.width; G.h = rect.height;
+  if (G.w <= 0 || G.h <= 0) return; // not laid out yet; ResizeObserver will retry
+  c.width = G.w * G.dpr; c.height = G.h * G.dpr;
+  G.ctx.setTransform(G.dpr, 0, 0, G.dpr, 0, 0);
+  if (!hadSize && G.nodes.length) recenterNodes(); // dimensions just became known
+}
+
+async function initGraph() {
+  G.canvas = $("graph");
+  if (!G.canvas) return;
+  G.ctx = G.canvas.getContext("2d");
+  gResize();
+  window.addEventListener("resize", gResize);
+  // The canvas may not be laid out when init runs (esp. a fresh desktop-launched
+  // tab); observe it so we size + re-center the moment it gets real dimensions.
+  if (window.ResizeObserver) new ResizeObserver(() => gResize()).observe(G.canvas);
+  bindGraphEvents();
+  await loadGraph();
+  requestAnimationFrame(gResize);
+  setTimeout(gResize, 350);
+  if (!G.raf) gStep();
+}
+
+async function loadGraph() {
+  try {
+    const data = await (await fetch("/api/graph")).json();
+    const cx = G.w / 2 || 600, cy = G.h / 2 || 200;
+    G.byId = {}; G.adj = {};
+    G.nodes = data.nodes.map((n) => {
+      const node = { ...n, x: cx + (Math.random() - 0.5) * 400, y: cy + (Math.random() - 0.5) * 200, vx: 0, vy: 0 };
+      G.byId[n.id] = node; G.adj[n.id] = new Set();
+      return node;
+    });
+    if (G.byId["jarvis"]) { G.byId["jarvis"].x = cx; G.byId["jarvis"].y = cy; }
+    G.links = data.links.filter((l) => G.byId[l.source] && G.byId[l.target]);
+    G.links.forEach((l) => { G.adj[l.source].add(l.target); G.adj[l.target].add(l.source); });
+  } catch (e) { /* graph optional */ }
+}
+
+function gStep() {
+  const { nodes, links, byId, ctx } = G;
+  const cx = G.w / 2, cy = G.h / 2;
+  // repulsion
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy || 0.01;
+      const f = 1400 / d2;
+      const d = Math.sqrt(d2);
+      const ux = dx / d, uy = dy / d;
+      a.vx += ux * f; a.vy += uy * f; b.vx -= ux * f; b.vy -= uy * f;
+    }
+  }
+  // springs
+  for (const l of links) {
+    const a = byId[l.source], b = byId[l.target];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const rest = 58 + a.r + b.r;
+    const f = (d - rest) * 0.015;
+    const ux = dx / d, uy = dy / d;
+    a.vx += ux * f; a.vy += uy * f; b.vx -= ux * f; b.vy -= uy * f;
+  }
+  // gravity + integrate + gentle drift
+  for (const n of nodes) {
+    n.vx += (cx - n.x) * 0.004; n.vy += (cy - n.y) * 0.004;
+    n.vx += (Math.random() - 0.5) * 0.08; n.vy += (Math.random() - 0.5) * 0.08;
+    n.vx *= 0.86; n.vy *= 0.86;
+    if (G.drag === n) { n.x = G.mouse.x; n.y = G.mouse.y; n.vx = n.vy = 0; }
+    else { n.x += n.vx; n.y += n.vy; }
+    if (G.w > 0 && G.h > 0) { // don't clamp to a zero-size canvas (collapses the graph)
+      n.x = Math.max(n.r, Math.min(G.w - n.r, n.x));
+      n.y = Math.max(n.r, Math.min(G.h - n.r, n.y));
+    }
+  }
+  // hover detection
+  if (!G.drag && G.mouse.x >= 0) {
+    G.hover = null; let best = 1e9;
+    for (const n of nodes) {
+      const dx = n.x - G.mouse.x, dy = n.y - G.mouse.y, d = Math.hypot(dx, dy);
+      if (d < n.r + 7 && d < best) { best = d; G.hover = n; }
+    }
+    G.canvas.style.cursor = G.hover ? "pointer" : "grab";
+  }
+  gDraw(ctx);
+  G.raf = requestAnimationFrame(gStep);
+}
+
+function gDraw(ctx) {
+  ctx.clearRect(0, 0, G.w, G.h);
+  const hov = G.hover;
+  const lit = hov ? G.adj[hov.id] : null;
+  // links
+  for (const l of G.links) {
+    const a = G.byId[l.source], b = G.byId[l.target];
+    const on = hov && (l.source === hov.id || l.target === hov.id);
+    ctx.strokeStyle = on ? "rgba(70,214,255,0.55)" : (hov ? "rgba(120,150,170,0.06)" : "rgba(120,160,180,0.16)");
+    ctx.lineWidth = on ? 1.6 : 0.7;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  // nodes
+  for (const n of G.nodes) {
+    const color = GROUP_COLORS[n.group] || "#9fb8c8";
+    const dim = hov && n !== hov && !(lit && lit.has(n.id));
+    ctx.globalAlpha = dim ? 0.28 : 1;
+    if (n === hov || n.group === "core") {
+      ctx.shadowColor = color; ctx.shadowBlur = n === hov ? 22 : 14;
+    } else { ctx.shadowBlur = 0; }
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r * (n === hov ? 1.25 : 1), 0, 6.2832);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.shadowBlur = 0;
+    // labels: core, hubs, ai/brain always; others on hover/neighbour
+    const showLabel = n.r >= 9 || n.group === "ai" || n.group === "brain" ||
+      n === hov || (lit && lit.has(n.id));
+    if (showLabel) {
+      ctx.globalAlpha = dim ? 0.4 : 1;
+      ctx.fillStyle = n === hov ? "#eaf7ff" : "#9fc4d6";
+      ctx.font = (n === hov ? "600 " : "") + Math.max(10, Math.min(13, n.r)) + "px Consolas, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(n.label, n.x, n.y - n.r - 5);
+    }
+  }
+  ctx.globalAlpha = 1;
+  // tooltip
+  const tip = $("graphTip");
+  if (hov) {
+    tip.style.display = "block";
+    tip.style.left = hov.x + "px"; tip.style.top = hov.y + "px";
+    tip.textContent = hov.label + (hov.drill ? "  · click to open" : "");
+  } else { tip.style.display = "none"; }
+}
+
+function bindGraphEvents() {
+  const c = G.canvas;
+  c.addEventListener("mousemove", (e) => {
+    const r = c.getBoundingClientRect();
+    G.mouse.x = e.clientX - r.left; G.mouse.y = e.clientY - r.top;
+  });
+  c.addEventListener("mouseleave", () => { G.mouse.x = G.mouse.y = -1; G.hover = null; });
+  c.addEventListener("mousedown", () => {
+    if (G.hover) { G.drag = G.hover; G.down = G.hover; G.downXY = { x: G.mouse.x, y: G.mouse.y }; }
+  });
+  window.addEventListener("mouseup", () => {
+    if (G.down && G.down.drill && G.downXY) {
+      const moved = Math.hypot(G.mouse.x - G.downXY.x, G.mouse.y - G.downXY.y);
+      if (moved < 6) handleDrill(G.down.drill); // a click, not a drag
+    }
+    G.drag = null; G.down = null;
   });
 }
 
@@ -417,11 +710,14 @@ async function boot() {
     $("muteBtn").textContent = voiceOn ? "🔊" : "🔇";
     $("muteBtn").classList.toggle("muted", !voiceOn);
   });
-  $("refreshBtn").addEventListener("click", () => { loadState(true); checkUpdates(true); });
+  $("refreshBtn").addEventListener("click", () => { loadState(true); checkUpdates(true); loadGraph(); });
+  $("graphRefresh").addEventListener("click", () => loadGraph());
   $("checkUpdatesBtn").addEventListener("click", () => checkUpdates(true));
   $("speakAnswers").addEventListener("change", (e) => { voiceOn = e.target.checked; });
-  // drill-down: delegated click for any [data-kind] element
+  // delegated clicks: modal action buttons first, then drill-down rows
   document.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]");
+    if (act) { handleAct({ ...act.dataset }, act); return; }
     const el = e.target.closest("[data-kind]");
     if (el) handleDrill({ ...el.dataset });
   });
@@ -439,6 +735,7 @@ async function boot() {
   });
 
   await loadState(false); // instant render from server cache; refresh button forces a rescan
+  initGraph();
 
   // brain readiness pill (click to run a live test)
   try {
@@ -467,11 +764,15 @@ async function boot() {
   try {
     const g = await (await fetch("/api/greeting")).json();
     printMsg("jarvis", g.text);
-    if (g.enabled) {
-      // browsers block autoplay until a gesture; play on first interaction if needed
-      speak(g.text).catch(() => {
-        document.addEventListener("click", () => speak(g.text), { once: true });
-      });
+    if (g.enabled && voiceOn) {
+      const played = await speak(g.text);
+      if (!played) {
+        // autoplay blocked — defer to first gesture and cue the user clearly
+        pendingGreet = g.text;
+        const btn = $("muteBtn");
+        if (btn) { btn.classList.add("need-audio"); btn.title = "click anywhere to enable JARVIS voice"; }
+        showVoiceCue();
+      }
     }
   } catch (e) {}
 
