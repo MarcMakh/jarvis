@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, brain, connectors, graph, inventory, launcher, updater
+from . import __version__, brain, connectors, graph, inventory, launcher, rag, updater
 from .obsidian import Obsidian
 from .util import load_config, load_env
 from .voice import Voice
@@ -49,15 +49,24 @@ class StateStore:
             cfg.get("obsidian", {}).get("vault", ""),
             cfg.get("obsidian", {}).get("log_folder", "JARVIS Logs"),
         )
-        self._cache = {
-            "version": __version__,
-            "identity": cfg.get("identity", {"name": "JARVIS", "honorific": "sir"}),
-            "generated": time.time(),
-            "inventory": inventory.collect(),
-            "connectors": connectors.scan_connectors(),
-            "projects": connectors.scan_projects(),
-            "obsidian": ob.status(),
-        }
+        # The four scans are independent and subprocess/IO-bound — run them
+        # concurrently so a cold load costs the slowest scan, not the sum.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            f_inv = ex.submit(inventory.collect)
+            f_conn = ex.submit(connectors.scan_connectors)
+            f_proj = ex.submit(connectors.scan_projects)
+            f_ob = ex.submit(ob.status)
+            self._cache = {
+                "version": __version__,
+                "identity": cfg.get("identity", {"name": "JARVIS", "honorific": "sir"}),
+                "generated": time.time(),
+                "inventory": f_inv.result(),
+                "connectors": f_conn.result(),
+                "projects": f_proj.result(),
+                "obsidian": f_ob.result(),
+            }
         self._ts = time.time()
 
     def get_updates(self, refresh: bool = False) -> dict[str, Any]:
@@ -79,7 +88,10 @@ def create_app() -> FastAPI:
         # JARVIS is a single-user local dashboard; never let the browser serve a
         # stale index.html/jarvis.js (that hid the graph after upgrades).
         resp = await call_next(request)
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        if request.url.path.startswith("/api/icon"):
+            resp.headers["Cache-Control"] = "public, max-age=86400"  # icons rarely change
+        else:
+            resp.headers["Cache-Control"] = "no-store, max-age=0"
         return resp
 
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
@@ -132,6 +144,23 @@ def create_app() -> FastAPI:
     def api_graph() -> JSONResponse:
         return JSONResponse(graph.build(store.get()))
 
+    @app.get("/api/icon")
+    def api_icon(path: str = "") -> Response:
+        """Icon PNG for a library shortcut, guarded to configured library roots."""
+        from pathlib import Path
+
+        from . import icons, launcher
+
+        p = Path(path)
+        roots = launcher._library_roots()
+        rp = str(p.resolve()).lower()
+        if not p.exists() or not any(rp.startswith(str(r.resolve()).lower()) for r in roots):
+            return Response(status_code=404)
+        data = icons.icon_png(path)
+        if not data:
+            return Response(status_code=404)
+        return Response(content=data, media_type="image/png")
+
     @app.post("/api/launch")
     async def api_launch(request: Request) -> JSONResponse:
         body = await request.json() or {}
@@ -140,9 +169,15 @@ def create_app() -> FastAPI:
             return JSONResponse(launcher.launch_terminal(body.get("target", "")))
         if kind == "app":
             return JSONResponse(launcher.launch_app(body.get("path", "")))
+        if kind == "file":
+            return JSONResponse(launcher.launch_file(body.get("path", "")))
         if kind == "obsidian":
             return JSONResponse(launcher.launch_obsidian())
         return JSONResponse({"ok": False, "error": "unknown launch kind"})
+
+    @app.post("/api/hermes/open")
+    def api_hermes_open() -> JSONResponse:
+        return JSONResponse(launcher.launch_hermes())
 
     @app.get("/api/run-info")
     def api_run_info(path: str = "") -> JSONResponse:
@@ -246,6 +281,23 @@ def create_app() -> FastAPI:
         )
         return {"text": text, "enabled": cfg.get("voice", {}).get("greet_on_start", True)}
 
+    @app.get("/api/rag/status")
+    def api_rag_status() -> JSONResponse:
+        return JSONResponse(rag.status())
+
+    @app.post("/api/rag/reindex")
+    async def api_rag_reindex(request: Request) -> JSONResponse:
+        body = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        return JSONResponse(rag.start_reindex(force=bool(body.get("force"))))
+
+    @app.get("/api/rag/search")
+    def api_rag_search(q: str = "", k: int = 0) -> JSONResponse:
+        return JSONResponse({"query": q, "results": rag.search(q, k or None)})
+
     @app.get("/api/brain/status")
     def api_brain_status() -> JSONResponse:
         return JSONResponse(brain.status(load_config()))
@@ -293,8 +345,10 @@ def _snapshot_markdown(state: dict[str, Any], updates: dict[str, Any]) -> str:
     lines.append(f"- Claude Code — {conn['claude'].get('status')} v{conn['claude'].get('version')}")
     for m in conn["mcp_servers"]:
         lines.append(f"  - MCP `{m['name']}` — {m['status']}")
-    for k in ("hermes", "openclaw"):
-        lines.append(f"- {k.title()} — {conn[k].get('status')}")
+    hc = conn.get("hermes_chat", {})
+    lines.append(f"- Hermes Chat — {hc.get('status', 'offline')} ({hc.get('url', '')})")
+    lines.append(f"- Hermes Skills — {conn.get('hermes', {}).get('status')}")
+    lines.append(f"- OpenClaw — {conn.get('openclaw', {}).get('status')}")
     total = sum(updates.get(k, {}).get("count", 0) for k in updates) if updates else 0
     lines.append(f"\n## Updates\n\n- {total} package update(s) pending")
     return "\n".join(lines)

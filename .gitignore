@@ -5,8 +5,8 @@ __pycache__/
 
 # secrets & local state
 .env
-data/voice_cache/
-data/app_profile/
+# all local state: rag index (contains personal note content!), caches, app profile
+data/
 
 # generated
 static/jarvis.ico

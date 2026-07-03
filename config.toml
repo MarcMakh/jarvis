@@ -7,19 +7,28 @@ honorific = "sir"
 
 [voice]
 enabled = true
-# Any edge-tts voice. en-GB-RyanNeural = calm British male (very JARVIS).
+# provider: "auto" uses ElevenLabs when a key + voice_id are set, else free
+# edge-tts. Force with "elevenlabs" or "edge".
+provider = "auto"
+# --- edge-tts (free, no key). en-GB-RyanNeural = calm British male (very JARVIS).
 # Alternatives: en-GB-ThomasNeural, en-US-GuyNeural, en-AU-WilliamNeural
 voice = "en-GB-RyanNeural"
 rate = "-4%"     # slightly slower = more deliberate
 pitch = "-2Hz"
 greet_on_start = true
+# --- ElevenLabs (needs ELEVENLABS_API_KEY in .env). Paste a voice_id to switch
+# JARVIS to an ElevenLabs voice; leave blank to stay on edge-tts. ---
+elevenlabs_voice_id = ""
+elevenlabs_model = "eleven_turbo_v2_5"
+elevenlabs_stability = 0.4
+elevenlabs_similarity = 0.75
 
 [brain]
 enabled = true
 # "auto" = use ANTHROPIC_API_KEY via SDK if set, else fall back to the claude CLI
 # (which uses your existing Claude Code subscription auth, no API key needed).
 # Force a mode with "sdk" or "cli".
-mode = "auto"
+mode = "cli"
 # Model used when going through the anthropic SDK (API key path).
 sdk_model = "claude-sonnet-4-6"
 # Model used when going through the claude CLI.
@@ -45,6 +54,15 @@ roots = [
 docs_path = "trading_architecture/notebooks"
 run_path = "trading_architecture"
 
+[library]
+# Folders of launchable shortcuts (games, emulators, apps) surfaced as their own
+# branches on the ecosystem map. Each top-level .lnk/.url/.exe becomes a node you
+# can click to launch. Add or remove roots freely.
+roots = [
+    { name = "PC Games", path = 'D:\PC Games' },
+    { name = "Emulators", path = 'D:\Emulators' },
+]
+
 [server]
 host = "127.0.0.1"
 port = 7717
@@ -59,3 +77,28 @@ watch = ["claude", "hermes", "openclaw", "git", "gh", "uv", "ruff", "pyright", "
 # reports the git branch, and lights up the connector. Leave blank to rely on a
 # `hermes` CLI on PATH or a hermes-named folder in PythonProjects.
 hermes_path = 'C:\Users\markj\source\repos\hermes-skills'
+# The Hermes open-LLM chat app (separate FastAPI server). JARVIS probes this URL
+# for status/providers and shows a panel. Path is auto-found under the project
+# roots (a "Hermes" folder); set it explicitly here to override.
+hermes_chat_url = "http://127.0.0.1:7718"
+# hermes_chat_path = 'C:\Users\markj\Documents\PythonProjects\Hermes'
+
+[rag]
+# Vault memory: local RAG over your notes. Markdown from `roots` is chunked and
+# embedded through LM Studio's /v1/embeddings (download an embedding model such
+# as text-embedding-nomic-embed-text-v1.5, start the server, click "vault" in
+# the HUD to index). The JARVIS brain and Hermes' vault toggle both retrieve
+# from it. Defaults for roots: the Obsidian vault above + Documents\Delivery Vaults.
+enabled = true
+embed_base_url = "http://127.0.0.1:1234/v1"
+embed_model = "text-embedding-nomic-embed-text-v1.5"
+# roots = ['C:\Users\markj\Documents\Obsidian Vault', 'C:\Users\markj\Documents\Delivery Vaults']
+top_k = 6
+brain_context = true
+brain_k = 4
+# Office/PDF documents under doc_roots are converted with your local markitdown
+# and indexed under their original paths (defaults: PythonProjects + Delivery
+# Vaults; conversions cached, so unchanged files cost nothing on reindex).
+# doc_roots = ['C:\Users\markj\Documents\PythonProjects', 'C:\Users\markj\Documents\Delivery Vaults']
+# doc_exts = [".docx", ".pdf", ".pptx", ".xlsx"]
+# markitdown = 'C:\Users\markj\markitdown\.venv\Scripts\markitdown.exe'

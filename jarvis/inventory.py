@@ -89,19 +89,26 @@ def scan_runtimes() -> list[dict[str, Any]]:
                     }
                 )
 
-    for label, exe, args in [
+    # Version probes are independent subprocess spawns — run them concurrently.
+    from concurrent.futures import ThreadPoolExecutor
+
+    tools = [
         ("uv", "uv", ["--version"]),
         ("Node.js", "node", ["--version"]),
         ("npm", "npm", ["--version"]),
         ("pip", "pip", ["--version"]),
-    ]:
-        items.append(_probe(label, exe, args))
+    ]
+    with ThreadPoolExecutor(max_workers=len(tools)) as ex:
+        items.extend(ex.map(lambda t: _probe(*t), tools))
 
     return items
 
 
 def scan_dev_tools() -> list[dict[str, Any]]:
-    return [_probe(label, exe, args) for label, exe, args in _DEV_TOOLS]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(_DEV_TOOLS)) as ex:
+        return list(ex.map(lambda t: _probe(*t), _DEV_TOOLS))
 
 
 def scan_packages() -> list[dict[str, Any]]:
@@ -146,9 +153,16 @@ def system_stats() -> dict[str, Any]:
 
 
 def collect() -> dict[str, Any]:
-    return {
-        "runtimes": scan_runtimes(),
-        "dev_tools": scan_dev_tools(),
-        "packages": scan_packages(),
-        "system": system_stats(),
-    }
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_rt = ex.submit(scan_runtimes)
+        f_dt = ex.submit(scan_dev_tools)
+        f_pk = ex.submit(scan_packages)
+        f_sys = ex.submit(system_stats)
+        return {
+            "runtimes": f_rt.result(),
+            "dev_tools": f_dt.result(),
+            "packages": f_pk.result(),
+            "system": f_sys.result(),
+        }

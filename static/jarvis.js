@@ -5,6 +5,7 @@ let voiceOn = true;
 let pollSeconds = 20;
 let lastState = null;
 let pendingGreet = null; // greeting deferred until the first user gesture (autoplay)
+let hermesInfo = null;   // latest Hermes chat-app status (for the open button)
 
 // ---------- voice ----------
 // Returns true only if audio actually started (so callers can defer on autoplay block).
@@ -109,7 +110,7 @@ function renderConnectors(conn) {
   const h = conn.hermes;
   html += `<div class="row clickable" data-kind="conn" data-name="hermes">
     <span class="led ${led(h.status)}"></span>
-    <span class="name">Hermes${h.branch ? " · " + h.branch : ""}</span>
+    <span class="name">${h.name || "Hermes Skills"}${h.branch ? " · " + h.branch : ""}</span>
     <span class="ver ${h.present ? "" : "miss"}">${h.present ? (h.version || h.status) : h.status}</span>
     <span class="drill">details ›</span></div>`;
   if (h.skills && h.skills.length) {
@@ -131,6 +132,49 @@ function renderConnectors(conn) {
     <span class="ver ${oc.present ? "" : "miss"}">${oc.version ? "v" + oc.version : oc.status}</span>
     <span class="drill">details ›</span></div>`;
   $("connectors").innerHTML = html;
+}
+
+function renderHermes(h) {
+  const el = $("hermes");
+  if (!el) return;
+  hermesInfo = h || null;
+  if (!h) { el.innerHTML = `<div class="muted">Hermes chat not configured.</div>`; return; }
+  const online = h.status === "online";
+  const host = (h.url || "").replace(/^https?:\/\//, "");
+  let html = `<div class="row">
+    <span class="led ${online ? "on" : "off"}"></span>
+    <span class="name">chat server ${online ? "online" : "offline"}${h.version ? " · v" + esc(h.version) : ""}</span>
+    <span class="ver">${esc(host)}</span></div>`;
+
+  if (online) {
+    const provs = h.providers || [];
+    if (provs.length) {
+      const lu = h.lmstudio_update;
+      html += provs.map((p) => {
+        const models = (p.models || []).slice(0, 3).join(", ") +
+          ((p.models || []).length > 3 ? ` +${p.models.length - 3}` : "");
+        // LM Studio app-update flag (from winget), shown on the local provider row
+        const upd = (p.id === "lmstudio" && lu)
+          ? `<span class="badge amber" title="LM Studio ${esc(lu.current)} → ${esc(lu.latest)}">⚠ update ${esc(lu.latest)}</span>
+             <button class="mini-btn" data-act="winget" data-id="${esc(lu.id)}">update</button>`
+          : "";
+        return `<div class="row sub">
+          <span class="led ${p.available ? "on" : "off"}"></span>
+          <span class="name">${p.available ? "" : "⚠ "}${esc(p.label || p.id)}</span>
+          <span class="ver ${p.available ? "" : "miss"}">${esc(p.available ? (models || "ready") : p.reason)}</span>${upd}</div>`;
+      }).join("");
+    } else {
+      html += `<div class="muted" style="margin:4px 0">No providers configured yet.</div>`;
+    }
+    html += `<div class="act-row" style="margin-top:10px">
+      <button class="act-btn" data-act="hermes-open">▶ open Hermes chat</button></div>`;
+  } else {
+    html += `<div class="muted" style="margin:6px 0">Not running on ${esc(h.url)}.</div>`;
+    html += `<div class="act-row" style="margin-top:8px">` +
+      (h.path ? `<button class="act-btn" data-act="hermes-start" data-path="${esc(h.path)}">▶ start Hermes</button>` : "") +
+      `<button class="act-btn" data-act="hermes-open">open anyway ⇱</button></div>`;
+  }
+  el.innerHTML = html;
 }
 
 function renderObsidian(ob) {
@@ -231,6 +275,7 @@ async function loadState(refresh = false) {
     renderList("runtimes", s.inventory.runtimes.filter((x) => x.present));
     renderList("tools", s.inventory.dev_tools);
     renderConnectors(s.connectors);
+    renderHermes(s.connectors.hermes_chat);
     renderObsidian(s.obsidian);
     renderProjects(s.projects);
     setOnline(true);
@@ -349,6 +394,22 @@ function handleDrill(ds) {
         ["Version", "v" + conn.claude.version], ["Status", conn.claude.status],
         ["Path", conn.claude.path], ["MCP servers", `${d.mcp_online}/${d.mcp_count} online`],
       ]) + `<div style="margin-top:10px"><button class="act-btn" data-act="launch-term" data-target="claude" data-label="Claude">▶ open Claude terminal</button></div>`);
+    } else if (ds.name === "hermes_chat") {
+      const hc = conn.hermes_chat || {};
+      const provs = (hc.providers || []).map((p) => {
+        const models = (p.models || []).length ? ` <span class="muted">(${esc((p.models || []).join(", "))})</span>` : "";
+        return `<div class="commit">${p.available ? "●" : "○"} <b>${esc(p.label || p.id)}</b>${models}${p.available ? "" : ` <span class="muted">— ${esc(p.reason)}</span>`}</div>`;
+      }).join("");
+      const online = hc.status === "online";
+      const act = `<div class="act-row" style="margin-top:10px">` +
+        (online ? `<button class="act-btn" data-act="hermes-open">▶ open Hermes chat</button>` : "") +
+        (!online && hc.path ? `<button class="act-btn" data-act="hermes-start" data-path="${esc(hc.path)}">▶ start Hermes</button>` : "") +
+        (hc.path ? `<button class="act-btn" data-act="open-code" data-path="${esc(hc.path)}">open in VS Code</button>` : "") +
+        `</div>`;
+      openModal("Hermes · Open-LLM Chat", "multi-provider LLM relay", kv([
+        ["Status", hc.status], ["URL", hc.url], ["Version", hc.version ? "v" + hc.version : "—"],
+        ["Providers", (hc.providers || []).length], ["Path", hc.path || "—"],
+      ]) + (provs ? `<div class="section-title">Providers</div>${provs}` : "") + act);
     } else if (ds.name === "hermes") {
       const h = conn.hermes;
       const skills = (h.skills || []).map((s) =>
@@ -356,7 +417,7 @@ function handleDrill(ds) {
       const act = h.path ? `<div style="margin-top:10px">
         <button class="act-btn" data-act="open-code" data-path="${esc(h.path)}">▶ open in VS Code</button>
         <button class="act-btn" data-act="open-folder" data-path="${esc(h.path)}">▶ open folder</button></div>` : "";
-      openModal("Hermes", "AI skills framework", kv([
+      openModal(h.name || "Hermes Skills", "reusable agent skills", kv([
         ["Status", h.status], ["Branch", h.branch], ["Path", h.path], ["Skills", (h.skills || []).length],
       ]) + (skills ? `<div class="section-title">Skills</div>${skills}` : "") + act);
     } else if (ds.name === "obsidian") {
@@ -372,6 +433,10 @@ function handleDrill(ds) {
     }
   } else if (ds.kind === "project") {
     openProjectDetail(decodeURIComponent(ds.path));
+  } else if (ds.kind === "launch") {
+    openModal(ds.name || "Launch", "library shortcut",
+      kv([["File", ds.path]]) +
+      `<div style="margin-top:12px"><button class="act-btn" data-act="launch-file" data-path="${esc(ds.path)}" data-label="${esc(ds.name || "")}">▶ launch</button></div>`);
   } else if (ds.kind === "winget-all") {
     openWingetAll();
   }
@@ -476,7 +541,21 @@ function handleAct(ds, el) {
     case "open-doc": postPath("/api/open/doc", ds.path, "Opening document, sir."); break;
     case "launch-term": launch("terminal", { target: ds.target }, ds.label || ds.target); break;
     case "launch-obsidian": launch("obsidian", {}, "Obsidian"); break;
+    case "launch-file": launch("file", { path: ds.path }, ds.label || "program"); break;
     case "winget": applyToolUpgrade(ds.id, el); break;
+    case "hermes-open":
+      printMsg("jarvis", "Opening HERMES, sir.");
+      fetch("/api/hermes/open", { method: "POST" }).then((r) => r.json()).then((res) =>
+        printMsg("jarvis", res.ok
+          ? (res.action === "starting" ? "HERMES is starting…" : "HERMES opened.")
+          : "Couldn't open HERMES: " + (res.error || ""))).catch(() => {});
+      break;
+    case "hermes-start":
+      launch("app", { path: ds.path }, "Hermes");
+      printMsg("jarvis", "Starting Hermes, sir. It should be online in a moment.");
+      // Re-scan a few times so the panel flips to online once the server binds.
+      [4000, 8000, 13000].forEach((t) => setTimeout(() => loadState(true), t));
+      break;
   }
 }
 
@@ -510,9 +589,10 @@ function setupSearch() {
 
 // ---------- ecosystem force graph ----------
 const GROUP_COLORS = {
-  core: "#ff7ab6", ai: "#46d6ff", mcp: "#4dffb0", mcp_err: "#ff5d6c",
-  brain: "#b794ff", note: "#8a7dff", skill: "#ffd24d", runtime: "#5ad1ff",
-  tool: "#ffa94d", hub: "#cfe9f5", project: "#ff9bd0", absent: "#44606e",
+  core: "#ff4d9d", ai: "#38bdf8", mcp: "#2dd4bf", mcp_err: "#f43f5e",
+  brain: "#a78bfa", note: "#818cf8", skill: "#fbbf24", runtime: "#22d3ee",
+  tool: "#fb923c", hub: "#fcd34d", project: "#f472b6", absent: "#4b6472",
+  game: "#22c55e", emulator: "#c084fc",
 };
 const G = {
   canvas: null, ctx: null, dpr: 1, w: 0, h: 0,
@@ -690,6 +770,182 @@ function bindGraphEvents() {
   });
 }
 
+// ---------- ecosystem map (2D force graph · 3D-shaded beads · collapsible) ----------
+// Flat layout, but each node is drawn as a shaded sphere. Branch nodes (hubs like
+// "PC Games", connectors, etc.) start collapsed; click one to open its children and
+// zoom in, click empty space to collapse everything and zoom back out.
+let MAP = null;
+let rawNodes = [], rawLinks = [], childMap = {}, parentMap = {}, initialCollapsed = new Set(), collapsed = new Set();
+
+function _rgb(h) { h = h.replace("#", ""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)); }
+function lighten(h, a) { const [r, g, b] = _rgb(h); const f = (x) => Math.round(x + (255 - x) * a); return `rgb(${f(r)},${f(g)},${f(b)})`; }
+function darken(h, a) { const [r, g, b] = _rgb(h); const f = (x) => Math.round(x * (1 - a)); return `rgb(${f(r)},${f(g)},${f(b)})`; }
+function hasKids(id) { return (childMap[id] || []).length > 0; }
+
+function sizeGraphMap() {
+  const el = $("graphmap");
+  if (MAP && el) MAP.width(el.clientWidth).height(el.clientHeight || 440);
+}
+
+// Only show nodes reachable from the core through non-collapsed branches.
+function visibleData() {
+  const shown = new Set(["jarvis"]);
+  const q = ["jarvis"];
+  while (q.length) {
+    const id = q.shift();
+    if (collapsed.has(id)) continue;
+    for (const c of (childMap[id] || [])) if (!shown.has(c)) { shown.add(c); q.push(c); }
+  }
+  return {
+    nodes: rawNodes.filter((n) => shown.has(n.id)),
+    links: rawLinks.filter((l) => shown.has(l.s) && shown.has(l.t)).map((l) => ({ source: l.s, target: l.t })),
+  };
+}
+
+// Lazily fetch shortcut icons, max 6 at a time (avoid spawning 60 PowerShells).
+const _iconQueue = [];
+let _iconActive = 0;
+function _pumpIcons() {
+  while (_iconActive < 6 && _iconQueue.length) {
+    const n = _iconQueue.shift();
+    _iconActive++;
+    const img = new Image();
+    const done = () => { _iconActive--; _pumpIcons(); };
+    img.onload = () => { n._icon = img; done(); };
+    img.onerror = done;
+    img.src = "/api/icon?path=" + encodeURIComponent(n.drill.path);
+  }
+}
+function ensureIcons(nodes) {
+  for (const n of nodes)
+    if ((n.group === "game" || n.group === "emulator") && !n._iconReq && n.drill && n.drill.path) {
+      n._iconReq = true; _iconQueue.push(n);
+    }
+  _pumpIcons();
+}
+function renderMap() {
+  const vis = visibleData();
+  MAP.graphData(vis);
+  ensureIcons(vis.nodes);   // load icons for whatever games are now visible
+}
+
+// Draw a node as a shaded 3D bead (radial gradient + glow), with a label.
+function drawNode(node, ctx, scale) {
+  const base = GROUP_COLORS[node.group] || "#9fb8c8";
+  const r = node.r || 6;
+  const kids = hasKids(node.id);
+  // game/emulator nodes show their real shortcut icon (clipped to a circle)
+  if (node._icon) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 6.2832); ctx.closePath(); ctx.clip();
+    ctx.drawImage(node._icon, node.x - r, node.y - r, r * 2, r * 2);
+    ctx.restore();
+    ctx.lineWidth = 1.2 / scale; ctx.strokeStyle = "rgba(180,220,255,0.55)";
+    ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 6.2832); ctx.stroke();
+    return;
+  }
+  const grad = ctx.createRadialGradient(node.x - r * 0.36, node.y - r * 0.36, r * 0.1, node.x, node.y, r);
+  grad.addColorStop(0, lighten(base, 0.6));
+  grad.addColorStop(0.5, base);
+  grad.addColorStop(1, darken(base, 0.5));
+  if (node.group === "core" || node.group === "hub" || kids) { ctx.shadowColor = base; ctx.shadowBlur = 18; }
+  ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 6.2832); ctx.fillStyle = grad; ctx.fill();
+  ctx.shadowBlur = 0;
+  // collapsed branch → ring, signalling "click to open"
+  if (kids && collapsed.has(node.id)) {
+    ctx.lineWidth = 1.6 / scale; ctx.strokeStyle = lighten(base, 0.4);
+    ctx.beginPath(); ctx.arc(node.x, node.y, r + 3 / scale, 0, 6.2832); ctx.stroke();
+  }
+  const showLabel = ["core", "hub", "ai", "brain"].includes(node.group) || kids;
+  if (showLabel) {
+    const fs = Math.max(4, (node.group === "core" ? 15 : 12) / scale);
+    ctx.font = `${fs}px Consolas, monospace`;
+    ctx.fillStyle = "#dbeffb"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.fillText(node.label, node.x, node.y - r - 2 / scale);
+  }
+}
+function nodeHit(node, color, ctx) {
+  const r = (node.r || 6) + 2;   // a touch larger than drawn, for easier clicking
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 6.2832); ctx.fill();
+}
+
+function initGraphMap() {
+  const el = $("graphmap");
+  if (!el || typeof ForceGraph === "undefined") return;
+  MAP = ForceGraph()(el)
+    .backgroundColor("rgba(0,0,0,0)")
+    .linkColor(() => "rgba(120,160,180,0.3)")
+    .linkWidth(0.9)
+    .nodeLabel((n) => n.label)
+    .nodeCanvasObject(drawNode)
+    .nodePointerAreaPaint(nodeHit)
+    .onNodeClick((node) => {
+      if (hasKids(node.id)) {
+        const opening = collapsed.has(node.id);
+        if (opening) collapsed.delete(node.id); else collapsed.add(node.id);
+        renderMap();
+        setTimeout(() => {
+          if (opening) {
+            MAP.centerAt(node.x, node.y, 700); MAP.zoom(2.6, 700);  // drill in → focus this bead
+          } else {
+            // collapse → fly back to the parent bead (or fit if it's top-level)
+            const par = MAP.graphData().nodes.find((n) => n.id === parentMap[node.id]);
+            if (par && par.id !== "jarvis") { MAP.centerAt(par.x, par.y, 700); MAP.zoom(2.0, 700); }
+            else MAP.zoomToFit(700, 60);
+          }
+        }, 60);
+      } else if (node.drill) {
+        handleDrill(node.drill);  // leaf → launch a game / open detail
+      }
+    })
+    .onBackgroundClick(() => {
+      collapsed = new Set(initialCollapsed);   // click away → collapse everything
+      renderMap();
+      MAP.zoomToFit(700, 60);
+    });
+  MAP.d3Force("charge").strength(-70);
+  if (MAP.d3Force("link")) MAP.d3Force("link").distance((l) => {
+    const s = typeof l.source === "object" ? l.source.id : l.source;
+    const t = typeof l.target === "object" ? l.target.id : l.target;
+    return (s === "jarvis" || t === "jarvis") ? 95 : 34;   // push hubs out from the core
+  });
+  MAP.d3VelocityDecay(0.72);
+  MAP.cooldownTicks(Infinity);
+  MAP.cooldownTime(Infinity);   // never stop ticking (default 15s) so it keeps floating
+  // Gentle perpetual float: each node drifts randomly but springs back toward a
+  // slowly-following "home", so the map jiggles without flying apart or freezing.
+  MAP.d3Force("float", () => {
+    for (const n of MAP.graphData().nodes) {
+      if (n.hx === undefined) { n.hx = n.x; n.hy = n.y; }
+      n.hx += (n.x - n.hx) * 0.05;
+      n.hy += (n.y - n.hy) * 0.05;
+      n.vx += (Math.random() - 0.5) * 0.6 + (n.hx - n.x) * 0.05;
+      n.vy += (Math.random() - 0.5) * 0.6 + (n.hy - n.y) * 0.05;
+    }
+  });
+  sizeGraphMap();
+  window.addEventListener("resize", sizeGraphMap);
+  loadGraphMap();
+}
+
+async function loadGraphMap() {
+  if (!MAP) return;
+  try {
+    const data = await (await fetch("/api/graph")).json();
+    rawNodes = data.nodes;
+    rawLinks = data.links.map((l) => ({ s: l.source, t: l.target }));
+    childMap = {};
+    parentMap = {};
+    for (const l of rawLinks) { (childMap[l.s] = childMap[l.s] || []).push(l.t); parentMap[l.t] = l.s; }
+    // Show one level below the core by default; only the big game/emulator
+    // libraries start collapsed, so you drill into those to avoid clutter.
+    initialCollapsed = new Set(rawNodes.filter((n) => String(n.id).startsWith("lib:")).map((n) => n.id));
+    collapsed = new Set(initialCollapsed);
+    renderMap();
+    setTimeout(() => MAP && MAP.zoomToFit(600, 70), 500);
+  } catch (e) { /* graph optional */ }
+}
+
 // ---------- clock ----------
 function tickClock() {
   $("clock").textContent = new Date().toLocaleTimeString("en-GB");
@@ -710,8 +966,9 @@ async function boot() {
     $("muteBtn").textContent = voiceOn ? "🔊" : "🔇";
     $("muteBtn").classList.toggle("muted", !voiceOn);
   });
-  $("refreshBtn").addEventListener("click", () => { loadState(true); checkUpdates(true); loadGraph(); });
-  $("graphRefresh").addEventListener("click", () => loadGraph());
+  $("refreshBtn").addEventListener("click", () => { loadState(true); checkUpdates(true); loadGraphMap(); });
+  $("graphRefresh").addEventListener("click", () => loadGraphMap());
+  $("clearConsole").addEventListener("click", () => { $("consoleIO").innerHTML = ""; });
   $("checkUpdatesBtn").addEventListener("click", () => checkUpdates(true));
   $("speakAnswers").addEventListener("change", (e) => { voiceOn = e.target.checked; });
   // delegated clicks: modal action buttons first, then drill-down rows
@@ -735,7 +992,7 @@ async function boot() {
   });
 
   await loadState(false); // instant render from server cache; refresh button forces a rescan
-  initGraph();
+  initGraphMap();
 
   // brain readiness pill (click to run a live test)
   try {
@@ -757,6 +1014,46 @@ async function boot() {
       } catch (e) {
         pill.textContent = prev;
       }
+    });
+  } catch (e) {}
+
+  // vault-memory pill (local RAG) — shows index size; click to (re)index
+  try {
+    const rp = $("ragPill");
+    const renderRag = (s) => {
+      const p = s.progress || {};
+      if (p.state === "embedding" || p.state === "scanning") {
+        rp.textContent = `vault · indexing ${p.done_chunks || 0}/${p.new_chunks || "…"}`;
+        rp.classList.remove("ready", "notready");
+        return true; // still running
+      }
+      if (s.indexed) {
+        rp.textContent = `vault · ${s.chunks} chunks`;
+        rp.classList.add(s.available ? "ready" : "notready");
+      } else {
+        rp.textContent = s.available ? "vault · click to index" : "vault · embedder offline";
+        rp.classList.add(s.available ? "notready" : "notready");
+      }
+      return false;
+    };
+    const ragStatus = async () => renderRag(await (await fetch("/api/rag/status")).json());
+    await ragStatus();
+    rp.style.cursor = "pointer";
+    rp.title = "Vault memory — local RAG over your notes. Click to (re)index.";
+    rp.addEventListener("click", async () => {
+      const r = await (await fetch("/api/rag/reindex", { method: "POST" })).json();
+      if (r.error) { printMsg("jarvis", `Vault indexing failed: ${r.error}`); return; }
+      printMsg("jarvis", "Indexing your vaults, sir. I'll keep the pill posted.");
+      const timer = setInterval(async () => {
+        const running = await ragStatus();
+        if (!running) {
+          clearInterval(timer);
+          const s = await (await fetch("/api/rag/status")).json();
+          printMsg("jarvis", s.indexed
+            ? `Vault memory ready: ${s.chunks} chunks from ${s.files} notes.`
+            : `Vault indexing did not complete: ${(s.progress || {}).error || "unknown"}`);
+        }
+      }, 1500);
     });
   } catch (e) {}
 

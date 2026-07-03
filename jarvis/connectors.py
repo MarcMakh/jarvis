@@ -11,6 +11,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 from .util import first_line, load_config, run, which
 
@@ -113,7 +114,7 @@ def _hermes() -> dict[str, Any]:
     """Hermes may be a CLI or a skills repo. Prefer the configured repo path,
     then a `hermes` CLI, then a hermes-named folder in PythonProjects."""
     info: dict[str, Any] = {
-        "name": "Hermes",
+        "name": "Hermes Skills",
         "kind": "ai-framework",
         "present": False,
         "path": None,
@@ -162,6 +163,82 @@ def _openclaw() -> dict[str, Any]:
     return _generic_cli("openclaw", "OpenClaw", "ai-framework")
 
 
+_lms_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
+def _lmstudio_update_cached(ttl: float = 900.0) -> dict[str, Any] | None:
+    """LM Studio app-update status via winget, cached (winget is slow; the app
+    updates rarely, so a 15-minute cache is plenty)."""
+    import time
+
+    from . import updater
+
+    now = time.time()
+    if now - _lms_cache["ts"] > ttl:
+        try:
+            _lms_cache["data"] = updater.lmstudio_update()
+        except Exception:
+            _lms_cache["data"] = None
+        _lms_cache["ts"] = now
+    return _lms_cache["data"]
+
+
+def _hermes_chat() -> dict[str, Any]:
+    """The Hermes open-LLM chat app - a separate FastAPI server (default :7718).
+    Probed over HTTP so the HUD shows whether it's up, which providers/models are
+    available, and can start it (it lives under a project root, so JARVIS's
+    existing `launch_app` runs `uv run hermes`)."""
+    conn = load_config().get("connectors", {}) or {}
+    url = str(conn.get("hermes_chat_url") or "http://127.0.0.1:7718").rstrip("/")
+
+    # Resolve the project folder so the HUD can offer a "start" action when down.
+    path = conn.get("hermes_chat_path") or ""
+    if not (path and Path(path).exists()):
+        path = ""
+        for root in _project_roots():
+            cand = root / "Hermes"
+            if cand.exists():
+                path = str(cand)
+                break
+
+    info: dict[str, Any] = {
+        "name": "Hermes Chat",
+        "kind": "ai-app",
+        "present": False,
+        "status": "offline",
+        "url": url,
+        "path": path or None,
+        "version": None,
+        "providers": [],
+        "lmstudio_update": _lmstudio_update_cached(),
+    }
+    try:
+        with urlopen(f"{url}/api/health", timeout=1.5) as r:
+            health = json.loads(r.read().decode("utf-8"))
+        info["present"] = True
+        info["status"] = "online"
+        info["version"] = health.get("version")
+    except Exception:
+        return info  # server not running; keep the offline shell (path lets us start it)
+
+    try:
+        with urlopen(f"{url}/api/providers", timeout=2.5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        info["providers"] = [
+            {
+                "id": p.get("id"),
+                "label": p.get("label"),
+                "available": p.get("available"),
+                "models": p.get("models", []),
+                "reason": p.get("reason", ""),
+            }
+            for p in data.get("providers", [])
+        ]
+    except Exception:
+        pass
+    return info
+
+
 def _safe_iter(path: Path):
     try:
         return list(path.iterdir())
@@ -175,15 +252,26 @@ def _semver(text: str) -> str | None:
 
 
 def scan_connectors() -> dict[str, Any]:
-    claude = _claude_code()
-    mcp = _mcp_servers()
-    claude["detail"] = {"mcp_count": len(mcp), "mcp_online": sum(1 for m in mcp if m["status"] == "online")}
-    return {
-        "claude": claude,
-        "mcp_servers": mcp,
-        "hermes": _hermes(),
-        "openclaw": _openclaw(),
-    }
+    # Each probe is an independent subprocess/HTTP call; `claude mcp list` alone
+    # can take many seconds, so run all five concurrently.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        f_claude = ex.submit(_claude_code)
+        f_mcp = ex.submit(_mcp_servers)
+        f_chat = ex.submit(_hermes_chat)
+        f_hermes = ex.submit(_hermes)
+        f_oc = ex.submit(_openclaw)
+        claude = f_claude.result()
+        mcp = f_mcp.result()
+        claude["detail"] = {"mcp_count": len(mcp), "mcp_online": sum(1 for m in mcp if m["status"] == "online")}
+        return {
+            "claude": claude,
+            "mcp_servers": mcp,
+            "hermes_chat": f_chat.result(),
+            "hermes": f_hermes.result(),
+            "openclaw": f_oc.result(),
+        }
 
 
 def _project_roots() -> list[Path]:
@@ -201,7 +289,7 @@ def scan_projects(limit: int = 24) -> list[dict[str, Any]]:
     """The full project ecosystem across all configured roots, newest first."""
     git = which("git")
     seen: set[str] = set()
-    out: list[dict[str, Any]] = []
+    todo: list[tuple[Path, Path]] = []  # (project dir, root)
     for root in _project_roots():
         for p in _safe_iter(root):
             if not p.is_dir() or p.name.startswith("."):
@@ -210,26 +298,34 @@ def scan_projects(limit: int = 24) -> list[dict[str, Any]]:
             if key in seen:
                 continue
             seen.add(key)
-            is_git = (p / ".git").exists()
-            branch = dirty = None
-            if is_git and git:
-                b = run([git, "-C", str(p), "rev-parse", "--abbrev-ref", "HEAD"], timeout=8)
-                branch = b.text if b.ok else None
-                st = run([git, "-C", str(p), "status", "--porcelain"], timeout=8)
-                dirty = bool(st.out.strip()) if st.ok else None
-            out.append(
-                {
-                    "name": p.name,
-                    "path": str(p),
-                    "root": root.name,
-                    "mtime": p.stat().st_mtime,
-                    "git": is_git,
-                    "branch": branch,
-                    "dirty": dirty,
-                    "has_venv": (p / ".venv").exists() or (p / "venv").exists(),
-                    "has_pyproject": (p / "pyproject.toml").exists(),
-                }
-            )
+            todo.append((p, root))
+
+    def _one(item: tuple[Path, Path]) -> dict[str, Any]:
+        p, root = item
+        is_git = (p / ".git").exists()
+        branch = dirty = None
+        if is_git and git:
+            b = run([git, "-C", str(p), "rev-parse", "--abbrev-ref", "HEAD"], timeout=8)
+            branch = b.text if b.ok else None
+            st = run([git, "-C", str(p), "status", "--porcelain"], timeout=8)
+            dirty = bool(st.out.strip()) if st.ok else None
+        return {
+            "name": p.name,
+            "path": str(p),
+            "root": root.name,
+            "mtime": p.stat().st_mtime,
+            "git": is_git,
+            "branch": branch,
+            "dirty": dirty,
+            "has_venv": (p / ".venv").exists() or (p / "venv").exists(),
+            "has_pyproject": (p / "pyproject.toml").exists(),
+        }
+
+    # Two git subprocesses per repo adds up across ~15 projects — parallelize.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        out = list(ex.map(_one, todo))
     out.sort(key=lambda d: d["mtime"], reverse=True)
     return out[:limit]
 

@@ -102,6 +102,27 @@ def _winget_check() -> dict[str, Any]:
     }
 
 
+_LMSTUDIO_WINGET_ID = "ElementLabs.LMStudio"
+
+
+def lmstudio_update() -> dict[str, Any] | None:
+    """If a newer LM Studio is available via winget, return {id, current, latest};
+    else None. Targeted single-package query (fast), used to flag the local model
+    host's own app updates in the HERMES panel."""
+    wg = which("winget")
+    if not wg:
+        return None
+    res = run(
+        [wg, "list", "--id", _LMSTUDIO_WINGET_ID, "--disable-interactivity",
+         "--accept-source-agreements"],
+        timeout=60,
+    )
+    for row in _parse_winget_table(res.out):
+        if row["id"].lower() == _LMSTUDIO_WINGET_ID.lower():
+            return {"id": row["id"], "current": row["current"], "latest": row["latest"]}
+    return None
+
+
 def winget_upgrade(pkg_id: str) -> dict[str, Any]:
     """Upgrade a single winget package by exact ID (validated against winget's
     own ID grammar). Used for Python and the other toolchain installs."""

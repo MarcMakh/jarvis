@@ -226,6 +226,72 @@ def open_app_window(url: str) -> bool:
     return False
 
 
+def _library_roots() -> list[Path]:
+    cfg = (load_config().get("library", {}) or {}).get("roots") or []
+    out: list[Path] = []
+    for r in cfg:
+        p = r.get("path") if isinstance(r, dict) else r
+        if p:
+            out.append(Path(p))
+    return out
+
+
+def launch_file(path: str) -> dict[str, Any]:
+    """Launch a shortcut/executable from a configured library or project root.
+    Guarded: the file must live under an allowed root and be a launchable type."""
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return {"ok": False, "error": "file not found"}
+    if p.suffix.lower() not in {".lnk", ".url", ".exe", ".bat", ".cmd"}:
+        return {"ok": False, "error": "not a launchable file"}
+    roots = _library_roots() + [Path(r) for r in ((load_config().get("projects", {}) or {}).get("roots") or [])]
+    rp = str(p.resolve()).lower()
+    if not any(rp.startswith(str(root.resolve()).lower()) for root in roots):
+        return {"ok": False, "error": "path outside allowed roots"}
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+        return {"ok": True, "launched": p.name}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _is_up(url: str) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/health", timeout=1.2):
+            return True
+    except Exception:
+        return False
+
+
+def launch_hermes() -> dict[str, Any]:
+    """Open HERMES as a chromeless app window; start its server first if needed."""
+    conn = load_config().get("connectors", {}) or {}
+    url = str(conn.get("hermes_chat_url") or "http://127.0.0.1:7718").rstrip("/")
+    path = conn.get("hermes_chat_path") or ""
+    if not (path and Path(path).exists()):
+        for r in (load_config().get("projects", {}) or {}).get("roots") or []:
+            cand = Path(r) / "Hermes"
+            if cand.exists():
+                path = str(cand)
+                break
+    if _is_up(url):
+        open_app_window(url)
+        return {"ok": True, "action": "opened", "url": url}
+    p = Path(path) if path else None
+    if not p or not p.exists():
+        return {"ok": False, "error": "Hermes project not found"}
+    try:
+        subprocess.Popen([which("uv") or "uv", "run", "hermes"], cwd=str(p), creationflags=_NO_WINDOW)
+        return {"ok": True, "action": "starting", "url": url}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def launch_obsidian() -> dict[str, Any]:
     vault = (load_config().get("obsidian", {}) or {}).get("vault", "")
     if not vault or not Path(vault).exists():

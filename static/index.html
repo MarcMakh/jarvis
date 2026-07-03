@@ -48,11 +48,10 @@
 
   <section class="mapwrap">
     <h2 class="map-title">🧠 Ecosystem Map
-      <span class="hint">live force graph · drifts on its own · hover to focus · click a node to drill in</span>
+      <span class="hint">drag to pan · scroll to zoom · click a hub to open it · click empty space to close</span>
       <button class="mini-btn" id="graphRefresh">rebuild</button>
     </h2>
-    <canvas id="graph"></canvas>
-    <div class="graph-tip" id="graphTip"></div>
+    <div id="graphmap" style="width:100%;height:440px;"></div>
   </section>
 
   <main class="grid">
@@ -64,8 +63,15 @@
       <h2>🛠 Dev Tools</h2><div class="body" id="tools"></div>
     </article>
 
+    <article class="card span2" id="card-hermes">
+      <h2>🜁 Hermes · Open-LLM Chat
+        <span class="hint">local models + GLM-5.2, one relay</span>
+        <button class="mini-btn" data-act="hermes-open">open ⇱</button></h2>
+      <div class="body" id="hermes"></div>
+    </article>
+
     <article class="card span2" id="card-connectors">
-      <h2>🧠 AI Connectors <span class="hint">Claude · MCP · Hermes · OpenClaw</span></h2>
+      <h2>🧠 AI Connectors <span class="hint">Claude · MCP · Hermes Skills · OpenClaw</span></h2>
       <div class="body" id="connectors"></div>
     </article>
 
@@ -90,8 +96,9 @@
 
   <section class="console">
     <div class="console-head">
-      <span class="prompt">▸ ask JARVIS <span class="brain-pill" id="brainPill">brain ?</span></span>
+      <span class="prompt">▸ ask JARVIS <span class="brain-pill" id="brainPill">brain ?</span><span class="brain-pill" id="ragPill" title="Vault memory (local RAG over your notes)">vault ?</span></span>
       <label class="speak-toggle"><input type="checkbox" id="speakAnswers" checked /> speak replies</label>
+      <button class="mini-btn" id="clearConsole" title="Clear conversation">clear</button>
     </div>
     <div class="console-io" id="consoleIO"></div>
     <form id="askForm" class="ask-row">
@@ -110,6 +117,7 @@
   </div>
 
   <audio id="player"></audio>
+  <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
   <script src="/static/jarvis.js"></script>
 </body>
 </html>

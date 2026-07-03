@@ -37,10 +37,28 @@ def build(state: dict[str, Any]) -> dict[str, Any]:
                   8.0, {"kind": "mcp", "name": m["name"]})
         link(claude, nid)
 
-    # Hermes + skills
+    # Hermes chat app (open-LLM relay) — its own server on :7718, with a node
+    # per model provider so its availability shows on the map.
+    hc = conn.get("hermes_chat", {})
+    online = hc.get("status") == "online"
+    hchat = add(
+        "conn:hermes_chat",
+        "Hermes" + (f" v{hc.get('version')}" if hc.get("version") else ""),
+        "ai" if online else "absent",
+        14.0,
+        {"kind": "conn", "name": "hermes_chat"},
+    )
+    link(core, hchat)
+    for p in hc.get("providers", []):
+        nid = add(f"llm:{p.get('id')}", p.get("label", p.get("id", "?")),
+                  "skill" if p.get("available") else "absent", 7.0,
+                  {"kind": "conn", "name": "hermes_chat"})
+        link(hchat, nid)
+
+    # Hermes Skills repo + its skills
     h = conn.get("hermes", {})
     if h.get("present"):
-        hermes = add("conn:hermes", "Hermes", "ai", 13.0, {"kind": "conn", "name": "hermes"})
+        hermes = add("conn:hermes", "Hermes Skills", "ai", 12.0, {"kind": "conn", "name": "hermes"})
         link(core, hermes)
         for s in h.get("skills", []):
             nid = add(f"skill:{s['name']}", s["name"], "skill", 6.0)
@@ -89,5 +107,19 @@ def build(state: dict[str, Any]) -> dict[str, Any]:
         nid = add(f"proj:{p['path']}", p["name"], "project", 8.0,
                   {"kind": "project", "path": p["path"]})
         link(proj_hub, nid)
+
+    # Library (games, emulators) — each shortcut is a launchable leaf node.
+    from . import library
+
+    for lib in library.scan():
+        emu = "emu" in lib["name"].lower()
+        hub = add(f"lib:{lib['name']}", f"{lib['name']} ({lib['count']})", "hub", 11.0,
+                  {"kind": "library", "name": lib["name"]})
+        link(core, hub)
+        for it in lib["items"]:
+            nid = add(f"launch:{it['path']}", it["name"],
+                      "emulator" if emu else "game", 10.0,
+                      {"kind": "launch", "path": it["path"], "name": it["name"]})
+            link(hub, nid)
 
     return {"nodes": nodes, "links": links}

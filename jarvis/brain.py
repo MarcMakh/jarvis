@@ -135,6 +135,20 @@ def ask(question: str, state: dict[str, Any], cfg: dict[str, Any]) -> dict[str, 
     context = build_context(state)
     system = f"{persona}\n\n=== SYSTEM STATE ===\n{context}"
 
+    # Vault memory: local RAG over the Obsidian + Delivery vaults. Empty string
+    # when disabled/unindexed/offline, so the brain works exactly as before.
+    try:
+        from . import rag
+
+        vault = rag.brain_context(question)
+        if vault:
+            system += (
+                "\n\n=== VAULT MEMORY (retrieved from the user's own notes; "
+                "name the note when you draw on it) ===\n" + vault
+            )
+    except Exception:
+        pass
+
     mode = bcfg.get("mode", "auto")
     have_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
