@@ -18,7 +18,7 @@ pitch = "-2Hz"
 greet_on_start = true
 # --- ElevenLabs (needs ELEVENLABS_API_KEY in .env). Paste a voice_id to switch
 # JARVIS to an ElevenLabs voice; leave blank to stay on edge-tts. ---
-elevenlabs_voice_id = ""
+elevenlabs_voice_id = "onwK4e9ZLuTAKqWW03F9"  # Daniel — steady British broadcaster
 elevenlabs_model = "eleven_turbo_v2_5"
 elevenlabs_stability = 0.4
 elevenlabs_similarity = 0.75
