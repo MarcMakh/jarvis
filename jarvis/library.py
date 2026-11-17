@@ -22,11 +22,14 @@ def roots() -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for r in cfg:
         if isinstance(r, dict):
-            name, path = r.get("name"), r.get("path")
+            name, path, opens = r.get("name"), r.get("path"), r.get("opens")
         else:
-            path, name = r, Path(r).name
+            path, name, opens = r, Path(r).name, None
         if path and Path(path).exists():
-            out.append({"name": name or Path(path).name, "path": path})
+            entry = {"name": name or Path(path).name, "path": path}
+            if opens:
+                entry["opens"] = opens  # this root launches an app instead of listing shortcuts
+            out.append(entry)
     return out
 
 
@@ -34,6 +37,12 @@ def scan(limit_per_root: int = 60) -> list[dict[str, Any]]:
     """List launchable shortcuts under each library root (capped, alphabetised)."""
     result: list[dict[str, Any]] = []
     for root in roots():
+        if root.get("opens"):
+            # A launcher root (e.g. Game Center) — no shortcuts to enumerate; the
+            # graph turns it into a single node that opens the target app.
+            result.append({"name": root["name"], "path": root["path"], "count": 0,
+                           "items": [], "opens": root["opens"]})
+            continue
         base = Path(root["path"])
         items: list[dict[str, str]] = []
         try:

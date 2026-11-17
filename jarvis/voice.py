@@ -15,7 +15,47 @@ import os
 from pathlib import Path
 from typing import Any
 
-_CACHE = Path(__file__).resolve().parent.parent / "data" / "voice_cache"
+from .util import data_dir
+
+# Spoken lines are cached on disk by text+voice. The cache is capped: once it
+# passes the limits below, the least-recently-used clips are dropped.
+_CACHE_MAX_FILES = 600
+_CACHE_MAX_BYTES = 150 * 1024 * 1024
+_writes = 0
+_client: Any = None
+
+
+def _cache_dir() -> Path:
+    d = data_dir() / "voice_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _http() -> Any:
+    """One shared HTTP client: sentence-by-sentence speech makes many small
+    requests, and reusing the connection saves a TLS handshake on each."""
+    global _client
+    if _client is None:
+        import httpx
+
+        _client = httpx.AsyncClient(timeout=30)
+    return _client
+
+
+def _prune_cache() -> None:
+    try:
+        files = [(f.stat().st_atime, f.stat().st_size, f) for f in _cache_dir().glob("*.mp3")]
+    except OSError:
+        return
+    files.sort(reverse=True)  # most recently used first
+    total = 0
+    for i, (_atime, size, f) in enumerate(files):
+        total += size
+        if i >= _CACHE_MAX_FILES or total > _CACHE_MAX_BYTES:
+            try:
+                f.unlink()
+            except OSError:
+                pass
 
 
 class Voice:
@@ -33,7 +73,6 @@ class Voice:
         self.el_model: str = v.get("elevenlabs_model", "eleven_turbo_v2_5")
         self.el_stability: float = float(v.get("elevenlabs_stability", 0.4))
         self.el_similarity: float = float(v.get("elevenlabs_similarity", 0.75))
-        _CACHE.mkdir(parents=True, exist_ok=True)
 
     def resolved_provider(self) -> str:
         have_el = bool(os.environ.get("ELEVENLABS_API_KEY") and self.el_voice_id)
@@ -58,7 +97,7 @@ class Voice:
             key = f"el|{self.el_voice_id}|{self.el_model}|{text}"
         else:
             key = f"edge|{self.voice}|{self.rate}|{self.pitch}|{text}"
-        return _CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.mp3"
+        return _cache_dir() / f"{hashlib.sha1(key.encode()).hexdigest()}.mp3"
 
     async def synthesize(self, text: str) -> bytes:
         """Return MP3 bytes for `text`, cached on disk by content + voice."""
@@ -67,6 +106,10 @@ class Voice:
         prov = self.resolved_provider()
         cached = self._cache_path(text, prov)
         if cached.exists():
+            try:
+                os.utime(cached)  # mark as recently used for the cache cap
+            except OSError:
+                pass
             return cached.read_bytes()
 
         data = b""
@@ -81,7 +124,11 @@ class Voice:
             data = await self._synth_edge(text)
 
         if data:
+            global _writes
             cached.write_bytes(data)
+            _writes += 1
+            if _writes % 40 == 1:
+                _prune_cache()
         return data
 
     async def _synth_edge(self, text: str) -> bytes:
@@ -95,8 +142,6 @@ class Voice:
         return bytes(buf)
 
     async def _synth_elevenlabs(self, text: str) -> bytes:
-        import httpx
-
         key = os.environ.get("ELEVENLABS_API_KEY")
         if not key or not self.el_voice_id:
             return b""
@@ -108,10 +153,9 @@ class Voice:
         }
         headers = {"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.post(url, json=payload, headers=headers)
-                r.raise_for_status()
-                return r.content
+            r = await _http().post(url, json=payload, headers=headers)
+            r.raise_for_status()
+            return r.content
         except Exception:
             return b""
 

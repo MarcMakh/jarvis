@@ -1,19 +1,30 @@
 """Checks for and applies updates across the toolchain.
 
 Apply actions are whitelisted: the UI only ever names a known target, and each
-target maps to a hard-coded command here. Nothing user-supplied is ever executed.
+target maps to a hard-coded command here. Nothing user-supplied is executed —
+package ids/names are validated against winget's and npm's own grammars.
+
+What is checked (in parallel, in the background — see state.py):
+  winget  the dev toolchain (Python, Git, gh, Node, uv, VS Code, LM Studio…);
+          everything else winget can upgrade is counted as "others"
+  npm     global packages, upgradable ONE AT A TIME (a blanket `npm update -g`
+          would also bump tools you pinned on purpose)
+  env     JARVIS's own direct dependencies (information only: a uv-managed
+          environment is upgraded with `uv lock --upgrade` while JARVIS is
+          stopped, not from inside the running server)
+  claude  Claude Code self-update
 """
 
 from __future__ import annotations
 
 import json
-import sys
+import re
+import time
+import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .util import run, which
-
-
-import re
+from .util import ROOT, clean_env, run, which
 
 # winget IDs JARVIS treats as "dev toolchain" (everything else winget can upgrade
 # — Chrome, Zoom, games — is hidden from the main view, available under "all").
@@ -31,19 +42,29 @@ _DEV_WINGET_IDS = {
     "Rustlang.Rustup": "Rust (rustup)",
     "astral-sh.uv": "uv",
     "Docker.DockerDesktop": "Docker Desktop",
+    "ElementLabs.LMStudio": "LM Studio",
+    "Obsidian.Obsidian": "Obsidian",
+    "Microsoft.PowerShell": "PowerShell",
+    "Microsoft.WindowsTerminal": "Windows Terminal",
 }
 _WINGET_ID_RE = re.compile(r"^[A-Za-z0-9.+_-]+$")
+_NPM_NAME_RE = re.compile(r"^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$")
 
 
 def check_updates() -> dict[str, Any]:
     """Return available updates without changing anything."""
-    return {
-        "pip": _pip_outdated(),
-        "npm": _npm_outdated(),
-        "uv": _uv_check(),
-        "claude": _claude_check(),
-        "winget": _winget_check(),
-    }
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_wg = ex.submit(_winget_check)
+        f_npm = ex.submit(_npm_outdated)
+        f_env = ex.submit(_env_outdated)
+        f_cl = ex.submit(_claude_check)
+        return {
+            "winget": f_wg.result(),
+            "npm": f_npm.result(),
+            "env": f_env.result(),
+            "claude": f_cl.result(),
+            "checked": time.time(),
+        }
 
 
 def _parse_winget_table(output: str) -> list[dict[str, str]]:
@@ -53,9 +74,10 @@ def _parse_winget_table(output: str) -> list[dict[str, str]]:
         if ln.startswith("Name") and "Id" in ln and "Available" in ln:
             hdr, idx = ln, i
             break
-    if hdr is None:
+    if hdr is None or idx is None:
         return []
-    iId, iVer, iAvail, iSrc = hdr.index("Id"), hdr.index("Version"), hdr.index("Available"), hdr.index("Source")
+    iId, iVer, iAvail = hdr.index("Id"), hdr.index("Version"), hdr.index("Available")
+    iSrc = hdr.index("Source") if "Source" in hdr else len(hdr) + 40
     rows: list[dict[str, str]] = []
     started = False
     for ln in lines[idx + 1:]:
@@ -95,30 +117,18 @@ def _winget_check() -> dict[str, Any]:
         r["label"] = _DEV_WINGET_IDS.get(r["id"], r["name"])
     return {
         "target": "winget",
-        "label": "Dev toolchain (winget)",
+        "label": "Dev toolchain",
         "count": len(dev),
         "items": dev,
         "others": len(rows) - len(dev),
+        "available": bool(which("winget")),
     }
 
 
-_LMSTUDIO_WINGET_ID = "ElementLabs.LMStudio"
-
-
 def lmstudio_update() -> dict[str, Any] | None:
-    """If a newer LM Studio is available via winget, return {id, current, latest};
-    else None. Targeted single-package query (fast), used to flag the local model
-    host's own app updates in the HERMES panel."""
-    wg = which("winget")
-    if not wg:
-        return None
-    res = run(
-        [wg, "list", "--id", _LMSTUDIO_WINGET_ID, "--disable-interactivity",
-         "--accept-source-agreements"],
-        timeout=60,
-    )
-    for row in _parse_winget_table(res.out):
-        if row["id"].lower() == _LMSTUDIO_WINGET_ID.lower():
+    """Kept for older callers: LM Studio's entry from the toolchain check."""
+    for row in _winget_check()["items"]:
+        if row["id"].lower() == "elementlabs.lmstudio":
             return {"id": row["id"], "current": row["current"], "latest": row["latest"]}
     return None
 
@@ -139,112 +149,101 @@ def winget_upgrade(pkg_id: str) -> dict[str, Any]:
     return {"ok": res.ok, "id": pkg_id, "code": res.code, "output": (res.out or res.err).strip()[-4000:]}
 
 
-def _pip_outdated() -> dict[str, Any]:
-    res = run([sys.executable, "-m", "pip", "list", "--outdated", "--format=json"], timeout=60)
+def _direct_deps() -> set[str]:
+    try:
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        deps = data.get("project", {}).get("dependencies", [])
+    except Exception:
+        return set()
+    return {re.split(r"[<>=!~\[; ]", d, maxsplit=1)[0].strip().lower().replace("_", "-") for d in deps}
+
+
+def _env_outdated() -> dict[str, Any]:
+    """JARVIS's own direct dependencies that have a newer release (via uv)."""
+    uv = which("uv")
     pkgs: list[dict[str, Any]] = []
-    if res.ok and res.out.strip():
-        try:
-            for p in json.loads(res.out):
-                pkgs.append(
-                    {"name": p["name"], "current": p["version"], "latest": p["latest_version"]}
-                )
-        except Exception:
-            pass
-    return {"target": "pip", "label": "Python packages (this env)", "count": len(pkgs), "items": pkgs}
+    if uv:
+        py = ROOT / ".venv" / "Scripts" / "python.exe"
+        cmd = [uv, "pip", "list", "--outdated", "--format", "json"]
+        if py.exists():
+            cmd += ["--python", str(py)]
+        res = run(cmd, timeout=90, cwd=str(ROOT))
+        direct = _direct_deps()
+        if res.ok and res.out.strip():
+            try:
+                for p in json.loads(res.out):
+                    if p["name"].lower().replace("_", "-") in direct:
+                        pkgs.append({"name": p["name"], "current": p["version"],
+                                     "latest": p["latest_version"]})
+            except Exception:
+                pass
+    return {"target": "env", "label": "JARVIS environment", "count": len(pkgs), "items": pkgs,
+            "note": "Upgrade with `uv lock --upgrade` while JARVIS is stopped."}
 
 
 def _npm_outdated() -> dict[str, Any]:
     npm = which("npm")
     pkgs: list[dict[str, Any]] = []
     if npm:
-        res = run([npm, "outdated", "-g", "--json"], timeout=60)
+        res = run([npm, "outdated", "-g", "--json"], timeout=90)
         # npm exits non-zero when packages are outdated; parse regardless.
         raw = res.out.strip()
         if raw:
             try:
                 for name, info in json.loads(raw).items():
-                    pkgs.append(
-                        {
-                            "name": name,
-                            "current": info.get("current"),
-                            "latest": info.get("latest"),
-                        }
-                    )
+                    if not isinstance(info, dict) or info.get("current") == info.get("latest"):
+                        continue
+                    pkgs.append({"name": name, "current": info.get("current"),
+                                 "latest": info.get("latest")})
             except Exception:
                 pass
     return {"target": "npm", "label": "npm global packages", "count": len(pkgs), "items": pkgs}
-
-
-def _uv_check() -> dict[str, Any]:
-    uv = which("uv")
-    current = None
-    if uv:
-        res = run([uv, "--version"], timeout=10)
-        current = res.text if res.ok else None
-    return {
-        "target": "uv",
-        "label": "uv (self-update)",
-        "count": 0,
-        "current": current,
-        "items": [],
-        "note": "Self-update available; latest version is checked on apply.",
-    }
 
 
 def _claude_check() -> dict[str, Any]:
     exe = which("claude")
     current = None
     if exe:
-        res = run([exe, "--version"], timeout=12)
-        current = res.text if res.ok else None
+        res = run([exe, "--version"], timeout=12, env=clean_env())
+        m = re.search(r"\d+\.\d+\.\d+", res.text)
+        current = m.group(0) if m else None
     return {
         "target": "claude",
         "label": "Claude Code",
         "count": 0,
         "current": current,
         "items": [],
-        "note": "Run update to fetch the latest Claude Code build.",
+        "available": bool(exe),
+        "note": "Self-updating; “update” fetches the latest build now.",
     }
 
 
-def apply_update(target: str) -> dict[str, Any]:
+def apply_update(target: str, package: str | None = None) -> dict[str, Any]:
     """Apply an update for a whitelisted target. Returns command output."""
-    npm = which("npm")
-    uv = which("uv")
-    claude = which("claude")
-
-    plans: dict[str, list[str] | None] = {
-        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
-        "uv": [uv, "self", "update"] if uv else None,
-        "npm": [npm, "update", "-g"] if npm else None,
-        "claude": [claude, "update"] if claude else None,
-    }
-
-    if target not in plans:
+    if target == "claude":
+        exe = which("claude")
+        if not exe:
+            return {"ok": False, "target": target, "error": "claude CLI not found"}
+        cmd = [exe, "update"]
+        env = clean_env()
+    elif target == "npm":
+        npm = which("npm")
+        if not npm:
+            return {"ok": False, "target": target, "error": "npm not found"}
+        name = (package or "").strip()
+        if not _NPM_NAME_RE.match(name):
+            return {"ok": False, "target": target, "error": "name one valid npm package to update"}
+        cmd = [npm, "install", "-g", f"{name}@latest"]
+        env = None
+    else:
         return {"ok": False, "target": target, "error": "unknown update target"}
-    cmd = plans[target]
-    if cmd is None:
-        return {"ok": False, "target": target, "error": f"{target} executable not found"}
 
-    res = run(cmd, timeout=300)
+    res = run(cmd, timeout=600, env=env)
     return {
         "ok": res.ok,
         "target": target,
+        "package": package,
         "command": " ".join(cmd),
-        "code": res.code,
-        "output": (res.out or res.err).strip()[-4000:],
-    }
-
-
-def upgrade_package(name: str) -> dict[str, Any]:
-    """Upgrade a single pip package in the current environment."""
-    safe = name.strip()
-    if not safe or not all(c.isalnum() or c in "-_.[]" for c in safe):
-        return {"ok": False, "error": "invalid package name"}
-    res = run([sys.executable, "-m", "pip", "install", "--upgrade", safe], timeout=300)
-    return {
-        "ok": res.ok,
-        "package": safe,
         "code": res.code,
         "output": (res.out or res.err).strip()[-4000:],
     }

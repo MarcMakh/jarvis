@@ -27,7 +27,12 @@ import httpx
 
 from .util import ROOT, load_config
 
-DATA_DIR = ROOT / "data" / "rag"
+# The index lives in the real data folder regardless of JARVIS_DATA_DIR: a
+# dev/test instance reads the same index instead of silently having none.
+# Set JARVIS_RAG_DIR to point a test at a throwaway index instead.
+import os as _os
+
+DATA_DIR = Path(_os.environ.get("JARVIS_RAG_DIR") or (ROOT / "data" / "rag"))
 META_PATH = DATA_DIR / "meta.json"
 VECS_PATH = DATA_DIR / "vectors.npy"
 DOCS_CACHE = DATA_DIR / "docs_md"
@@ -313,7 +318,10 @@ def reindex(force: bool = False) -> dict[str, Any]:
 
 def start_reindex(force: bool = False) -> dict[str, Any]:
     """Kick off a reindex in the background; the status endpoint reports progress."""
-    if _progress.get("state") in ("scanning", "embedding"):
+    if _os.environ.get("JARVIS_DATA_DIR") and not _os.environ.get("JARVIS_RAG_DIR"):
+        # A redirected (dev/test) instance shares the real index read-only.
+        return {"ok": False, "error": "reindexing is disabled on a dev/test instance"}
+    if _progress.get("state") in ("scanning", "converting", "embedding"):
         return {"ok": True, "already_running": True, **_progress}
 
     def _run():

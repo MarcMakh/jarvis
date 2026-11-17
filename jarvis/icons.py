@@ -10,10 +10,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from .util import run, which
+from .util import ROOT, run, which
 
-_DATA = Path(__file__).resolve().parent.parent / "data"
-_CACHE = _DATA / "icon_cache"
+# Icon extraction is slow (a PowerShell spawn each): share the real cache even
+# when a dev/test instance redirects its data dir.
+_CACHE = ROOT / "data" / "icon_cache"
 _SCRIPT = _CACHE / "_extract_icon.ps1"
 
 _SCRIPT_TEXT = r"""

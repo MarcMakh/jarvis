@@ -1,123 +1,269 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="arc">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>J.A.R.V.I.S</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2346d6ff' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%237fe3ff'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%234cd8ff' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%237fe3ff'/%3E%3C/svg%3E" />
+  <script>
+    // Apply the saved accent before first paint (no flash of the default theme).
+    try {
+      var p = JSON.parse(localStorage.getItem("jarvis.prefs") || "{}");
+      if (p.theme) document.documentElement.dataset.theme = p.theme;
+      if (p.float === false) document.documentElement.dataset.float = "off";
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="/static/jarvis.css" />
 </head>
 <body>
-  <div class="scanlines"></div>
-  <div class="vignette"></div>
+  <div class="backdrop" aria-hidden="true"></div>
 
+  <!-- ═══════════ top bar ═══════════ -->
   <header class="topbar">
     <div class="brand">
-      <span class="reactor" id="reactor"></span>
-      <h1 class="wordmark">J<i>·</i>A<i>·</i>R<i>·</i>V<i>·</i>I<i>·</i>S</h1>
-      <span class="status-pill" id="statusPill"><span class="dot"></span> online</span>
+      <span class="brand-mark" aria-hidden="true"></span>
+      <h1 class="wordmark">JARVIS</h1>
+      <span class="conn-pill" id="connPill" title="Connection to the JARVIS server"><i></i><span>online</span></span>
     </div>
-    <div class="meta">
-      <span id="clock" class="clock">--:--:--</span>
-      <span id="version" class="ver">v—</span>
-      <button id="muteBtn" class="ghost-btn" title="Toggle voice">🔊</button>
-      <button id="refreshBtn" class="ghost-btn" title="Refresh all">⟳</button>
+
+    <nav class="tabs" id="tabs" aria-label="Views">
+      <button data-view="overview" class="on"><span data-icon="grid"></span>Overview<kbd>1</kbd></button>
+      <button data-view="projects"><span data-icon="folder"></span>Projects<kbd>2</kbd></button>
+      <button data-view="systems"><span data-icon="server"></span>Systems<kbd>3</kbd></button>
+      <button data-view="map"><span data-icon="nodes"></span>Map<kbd>4</kbd></button>
+      <button data-view="vault"><span data-icon="book"></span>Vault<kbd>5</kbd></button>
+    </nav>
+
+    <div class="top-actions">
+      <button class="kbd-btn" id="paletteBtn" title="Command palette (Ctrl+K)"><span data-icon="search"></span><span>Search or run…</span><kbd>Ctrl K</kbd></button>
+      <span class="clock" id="clock">--:--</span>
+      <button class="icon-btn" id="bellBtn" title="Alerts &amp; activity"><span data-icon="bell"></span><b class="count" id="bellCount" hidden>0</b></button>
+      <button class="icon-btn" id="muteBtn" title="Voice on/off (Ctrl+M)"><span data-icon="volume"></span></button>
+      <button class="icon-btn" id="refreshBtn" title="Rescan everything"><span data-icon="refresh"></span></button>
+      <button class="icon-btn" id="settingsBtn" title="Settings"><span data-icon="sliders"></span></button>
     </div>
   </header>
 
-  <section class="gauges">
-    <div class="gauge" id="g-cpu">
-      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
-      <div class="gauge-label"><b id="cpuVal">—</b><small>CPU</small></div>
-    </div>
-    <div class="gauge" id="g-mem">
-      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
-      <div class="gauge-label"><b id="memVal">—</b><small>MEM</small></div>
-    </div>
-    <div class="gauge" id="g-disk">
-      <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"></circle><circle class="fill" cx="60" cy="60" r="50"></circle></svg>
-      <div class="gauge-label"><b id="diskVal">—</b><small>DISK C:</small></div>
-    </div>
-    <div class="readout" id="readout">
-      <div><span>HOST UPTIME</span><b id="uptime">—</b></div>
-      <div><span>MEMORY</span><b id="memDetail">—</b></div>
-      <div><span>DISK FREE</span><b id="diskDetail">—</b></div>
-      <div><span>CORES</span><b id="cores">—</b></div>
-    </div>
-  </section>
+  <!-- ═══════════ views ═══════════ -->
+  <main class="views" id="views">
 
-  <section class="mapwrap">
-    <h2 class="map-title">🧠 Ecosystem Map
-      <span class="hint">drag to pan · scroll to zoom · click a hub to open it · click empty space to close</span>
-      <button class="mini-btn" id="graphRefresh">rebuild</button>
-    </h2>
-    <div id="graphmap" style="width:100%;height:440px;"></div>
-  </section>
+    <!-- ── Overview ── -->
+    <section class="view on" data-view="overview">
+      <div class="grid">
+        <article class="card span4 hero" id="heroCard">
+          <div class="hero-top">
+            <canvas class="orb" id="heroOrb" width="220" height="220" aria-hidden="true"></canvas>
+            <div class="hero-text">
+              <div class="eyebrow" id="heroEyebrow">JARVIS · v—</div>
+              <h2 id="heroGreeting">Standing by.</h2>
+              <p class="hero-headline" id="heroHeadline">Scanning systems…</p>
+              <div class="hero-actions">
+                <button class="btn" data-act="brief"><span data-icon="volume"></span>Brief me</button>
+                <button class="btn ghost" data-act="capture"><span data-icon="plus"></span>Note</button>
+              </div>
+            </div>
+          </div>
+          <div class="brief-list" id="briefList"><div class="skeleton-lines"><i></i><i></i><i></i></div></div>
+        </article>
 
-  <main class="grid">
-    <article class="card" id="card-runtimes">
-      <h2>⚙ Runtimes</h2><div class="body" id="runtimes"></div>
-    </article>
+        <article class="card span8 mapcard" id="mapCard">
+          <header class="card-head">
+            <h3><span data-icon="nodes"></span>Ecosystem</h3>
+            <span class="hint" id="mapHint">click a hub to open it · Ctrl + scroll to zoom</span>
+            <div class="head-actions">
+              <button class="mini" data-act="map-zoom" data-dir="-1" title="Zoom out">−</button>
+              <button class="mini" data-act="map-zoom" data-dir="1" title="Zoom in">+</button>
+              <button class="mini" data-act="map-fit" title="Fit everything">fit</button>
+              <button class="mini" data-act="view" data-view="map" title="Open the full map"><span data-icon="expand"></span></button>
+            </div>
+          </header>
+          <div class="map-host" id="mapHostMini"></div>
+        </article>
 
-    <article class="card" id="card-tools">
-      <h2>🛠 Dev Tools</h2><div class="body" id="tools"></div>
-    </article>
+        <div class="vitals span12" id="vitals"></div>
 
-    <article class="card span2" id="card-hermes">
-      <h2>🜁 Hermes · Open-LLM Chat
-        <span class="hint">local models + GLM-5.2, one relay</span>
-        <button class="mini-btn" data-act="hermes-open">open ⇱</button></h2>
-      <div class="body" id="hermes"></div>
-    </article>
+        <article class="card span8" id="appsCard">
+          <header class="card-head">
+            <h3><span data-icon="play"></span>Apps</h3>
+            <span class="hint" id="appsHint"></span>
+          </header>
+          <div class="card-body apps" id="apps"><div class="skeleton-lines"><i></i><i></i><i></i></div></div>
+        </article>
 
-    <article class="card span2" id="card-connectors">
-      <h2>🧠 AI Connectors <span class="hint">Claude · MCP · Hermes Skills · OpenClaw</span></h2>
-      <div class="body" id="connectors"></div>
-    </article>
+        <article class="card span4" id="feedCard">
+          <header class="card-head">
+            <h3><span data-icon="bell"></span>Activity</h3>
+            <span class="hint" id="feedHint"></span>
+            <div class="head-actions"><button class="mini" data-act="feed-clear" title="Clear the activity log">clear</button></div>
+          </header>
+          <div class="card-body feed" id="feed"></div>
+        </article>
 
-    <article class="card" id="card-updates">
-      <h2>⬆ Updates <button class="mini-btn" id="checkUpdatesBtn">check</button></h2>
-      <div class="body" id="updates"><div class="muted">Click "check" to scan for updates.</div></div>
-    </article>
+        <article class="card span4" id="recentCard">
+          <header class="card-head">
+            <h3><span data-icon="folder"></span>Recent projects</h3>
+            <div class="head-actions"><button class="mini" data-act="view" data-view="projects">all →</button></div>
+          </header>
+          <div class="card-body" id="recentProjects"></div>
+        </article>
 
-    <article class="card" id="card-obsidian">
-      <h2>📓 Obsidian <button class="mini-btn" id="snapshotBtn">snapshot</button></h2>
-      <div class="body" id="obsidian"></div>
-      <div class="ob-search">
-        <input id="obQuery" placeholder="search vault…" />
-        <div id="obResults" class="ob-results"></div>
+        <article class="card span4" id="stackCard">
+          <header class="card-head">
+            <h3><span data-icon="spark"></span>AI stack</h3>
+            <div class="head-actions"><button class="mini" data-act="view" data-view="systems">details →</button></div>
+          </header>
+          <div class="card-body" id="aiStack"></div>
+        </article>
+
+        <article class="card span4" id="procCard">
+          <header class="card-head">
+            <h3><span data-icon="cpu"></span>What's using the machine</h3>
+          </header>
+          <div class="card-body procs" id="procs"></div>
+        </article>
       </div>
-    </article>
+    </section>
 
-    <article class="card span2" id="card-projects">
-      <h2>📁 Project Ecosystem</h2><div class="body proj-grid" id="projects"></div>
-    </article>
+    <!-- ── Projects ── -->
+    <section class="view" data-view="projects" hidden>
+      <div class="view-head">
+        <div class="shield-bar" id="shieldBar"></div>
+        <div class="toolbar">
+          <div class="seg" id="projFilter">
+            <button data-f="all" class="on">All</button>
+            <button data-f="dirty">Uncommitted</button>
+            <button data-f="risk">At risk</button>
+            <button data-f="run">Runnable</button>
+          </div>
+          <select id="projSort" class="select" title="Sort">
+            <option value="recent">Recent first</option>
+            <option value="name">Name</option>
+            <option value="risk">Least protected first</option>
+          </select>
+          <div class="search"><span data-icon="search"></span><input id="projSearch" placeholder="Filter projects…" autocomplete="off" /></div>
+        </div>
+      </div>
+      <div class="proj-grid" id="projGrid"></div>
+    </section>
+
+    <!-- ── Systems ── -->
+    <section class="view" data-view="systems" hidden>
+      <div class="grid">
+        <article class="card span4 tall"><header class="card-head"><h3><span data-icon="terminal"></span>Runtimes</h3><span class="hint" id="rtHint"></span></header><div class="card-body" id="runtimes"></div></article>
+        <article class="card span4 tall"><header class="card-head"><h3><span data-icon="wrench"></span>Dev tools</h3><span class="hint" id="toolsHint"></span></header><div class="card-body" id="tools"></div></article>
+        <article class="card span4 tall"><header class="card-head"><h3><span data-icon="spark"></span>AI connectors</h3><span class="hint" id="connHint"></span></header><div class="card-body" id="connectors"></div></article>
+        <article class="card span6 tall"><header class="card-head"><h3><span data-icon="download"></span>Updates</h3><span class="hint" id="updHint"></span><div class="head-actions"><button class="mini" data-act="updates-check">check now</button></div></header><div class="card-body" id="updates"></div></article>
+        <article class="card span3 tall"><header class="card-head"><h3><span data-icon="clock"></span>Automations</h3><span class="hint">scheduled tasks</span></header><div class="card-body" id="automations"></div></article>
+        <article class="card span3 tall"><header class="card-head"><h3><span data-icon="disk"></span>Storage</h3></header><div class="card-body" id="storage"></div></article>
+      </div>
+    </section>
+
+    <!-- ── Map ── -->
+    <section class="view view-map" data-view="map" hidden>
+      <div class="map-full card">
+        <header class="card-head">
+          <h3><span data-icon="nodes"></span>Ecosystem map</h3>
+          <span class="hint">drag to pan · scroll to zoom · click a hub to open it · click empty space to collapse</span>
+          <div class="head-actions">
+            <div class="search small"><span data-icon="search"></span><input id="mapSearch" placeholder="Find a node…" autocomplete="off" /></div>
+            <button class="mini" data-act="map-zoom" data-dir="-1">−</button>
+            <button class="mini" data-act="map-zoom" data-dir="1">+</button>
+            <button class="mini" data-act="map-fit">fit</button>
+            <button class="mini" data-act="map-reload">rebuild</button>
+          </div>
+        </header>
+        <div class="map-host" id="mapHostFull"></div>
+        <div class="map-legend" id="mapLegend"></div>
+      </div>
+    </section>
+
+    <!-- ── Vault ── -->
+    <section class="view" data-view="vault" hidden>
+      <div class="grid">
+        <article class="card span8 xtall">
+          <header class="card-head">
+            <h3><span data-icon="search"></span>Search your notes</h3>
+            <span class="hint" id="vaultSearchHint">keyword + meaning</span>
+          </header>
+          <div class="vault-search">
+            <div class="search big"><span data-icon="search"></span><input id="vaultQuery" placeholder="Search the vault — words, or a question in plain language…" autocomplete="off" /></div>
+          </div>
+          <div class="card-body" id="vaultResults"><div class="empty">Type to search. Keyword matches appear instantly; matches by meaning follow from the local index.</div></div>
+        </article>
+        <article class="card span4 xtall">
+          <header class="card-head"><h3><span data-icon="plus"></span>Quick capture</h3><span class="hint" id="inboxHint"></span></header>
+          <form class="capture" id="captureForm">
+            <textarea id="captureText" rows="3" placeholder="Jot something down — it is appended to your inbox note."></textarea>
+            <button class="btn" type="submit">Save to inbox</button>
+          </form>
+          <header class="card-head sub"><h3><span data-icon="clock"></span>Recent notes</h3></header>
+          <div class="card-body" id="vaultRecent"></div>
+          <footer class="card-foot" id="vaultFoot"></footer>
+        </article>
+      </div>
+    </section>
   </main>
 
-  <section class="console">
-    <div class="console-head">
-      <span class="prompt">▸ ask JARVIS <span class="brain-pill" id="brainPill">brain ?</span><span class="brain-pill" id="ragPill" title="Vault memory (local RAG over your notes)">vault ?</span></span>
-      <label class="speak-toggle"><input type="checkbox" id="speakAnswers" checked /> speak replies</label>
-      <button class="mini-btn" id="clearConsole" title="Clear conversation">clear</button>
-    </div>
-    <div class="console-io" id="consoleIO"></div>
-    <form id="askForm" class="ask-row">
-      <input id="askInput" autocomplete="off" placeholder="e.g. what needs updating? · what's the state of my MCP servers?" />
-      <button type="submit" id="askBtn">send</button>
-    </form>
+  <!-- ═══════════ conversation + command dock ═══════════ -->
+  <section class="convo" id="convo" hidden>
+    <header class="convo-head">
+      <span class="convo-title">Conversation</span>
+      <span class="hint" id="convoHint"></span>
+      <button class="mini" data-act="convo-clear" title="Forget this conversation">clear</button>
+      <button class="mini" data-act="convo-toggle" title="Hide (Esc)">hide</button>
+    </header>
+    <div class="convo-log" id="convoLog"></div>
   </section>
 
-  <div class="modal-backdrop" id="modalBackdrop">
-    <div class="modal" id="modal">
-      <span class="close" id="modalClose">×</span>
-      <h3 id="modalTitle">—</h3>
-      <div class="modal-sub" id="modalSub"></div>
-      <div id="modalBody"></div>
+  <footer class="dock">
+    <button class="dock-orb" id="dockOrbBtn" title="Hold a conversation: click to talk (when a microphone is selected)">
+      <canvas class="orb small" id="dockOrb" width="96" height="96" aria-hidden="true"></canvas>
+    </button>
+    <form class="ask" id="askForm">
+      <input id="askInput" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS, or tell him what to do — “open QuantFin”, “remind me in 20 minutes…”, “note: …”" />
+      <span class="ask-hint" id="askHint"><kbd>/</kbd> to focus</span>
+    </form>
+    <button class="chip brain" id="brainChip" title="Which engine answers — click for brain settings"><i></i><span>brain…</span></button>
+    <button class="chip vault" id="vaultChip" title="Vault memory (local index of your notes)"><i></i><span>vault…</span></button>
+    <button class="icon-btn mic" id="micBtn" title="Click and speak — it sends itself when you stop talking" hidden><span data-icon="mic"></span></button>
+    <button class="icon-btn send" id="askBtn" title="Send (Enter)"><span data-icon="send"></span></button>
+  </footer>
+
+  <!-- ═══════════ overlays ═══════════ -->
+  <aside class="drawer" id="drawer" hidden>
+    <header class="drawer-head">
+      <div><h3 id="drawerTitle">—</h3><div class="drawer-sub" id="drawerSub"></div></div>
+      <button class="icon-btn" data-act="drawer-close" title="Close (Esc)"><span data-icon="x"></span></button>
+    </header>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <aside class="panel" id="bellPanel" hidden>
+    <header class="panel-head"><h3>Alerts &amp; activity</h3><button class="mini" data-act="feed-clear">clear log</button></header>
+    <div class="panel-body" id="bellBody"></div>
+  </aside>
+
+  <div class="scrim" id="scrim" hidden></div>
+
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-box">
+      <header class="modal-head"><h3>Settings</h3><button class="icon-btn" data-act="settings-close"><span data-icon="x"></span></button></header>
+      <div class="modal-body" id="settingsBody"></div>
     </div>
   </div>
 
+  <div class="palette" id="palette" hidden>
+    <div class="palette-box">
+      <div class="palette-bar"><span data-icon="search"></span><input id="paletteInput" placeholder="Search apps, projects, notes and actions — or just ask…" autocomplete="off" spellcheck="false" /><kbd>Esc</kbd></div>
+      <div class="palette-list" id="paletteList"></div>
+      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> run</span><span><kbd>Tab</kbd> ask JARVIS instead</span></div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
   <audio id="player"></audio>
-  <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
-  <script src="/static/jarvis.js"></script>
+
+  <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js" defer></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

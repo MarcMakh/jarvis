@@ -23,16 +23,65 @@ elevenlabs_model = "eleven_turbo_v2_5"
 elevenlabs_stability = 0.4
 elevenlabs_similarity = 0.75
 
+[ears]
+# Speech-to-text for the mic button. Runs faster-whisper locally on CPU — your
+# voice never leaves this machine. Model auto-downloads to data/whisper once.
+# "base.en" = fast English; "small.en" = more accurate; for French/auto-detect
+# use a multilingual model ("base"/"small") and set language = "".
+enabled = true
+model = "base.en"
+language = "en"
+compute_type = "int8"
+
 [brain]
 enabled = true
-# "auto" = use ANTHROPIC_API_KEY via SDK if set, else fall back to the claude CLI
-# (which uses your existing Claude Code subscription auth, no API key needed).
-# Force a mode with "sdk" or "cli".
-mode = "cli"
-# Model used when going through the anthropic SDK (API key path).
-sdk_model = "claude-sonnet-4-6"
-# Model used when going through the claude CLI.
-cli_model = "sonnet"
+# Engines are tried in this order; the first one that is actually ready answers,
+# and if it fails before saying anything the next takes over:
+#   claude-cli  your Claude subscription via the `claude` CLI (needs `claude auth login` once)
+#   sdk         the Anthropic API (ANTHROPIC_API_KEY in .env)
+#   hermes      any model Hermes can reach (prefers a local model already loaded)
+#   local       an OpenAI-compatible server directly (LM Studio), for when Hermes is down
+# The ⚙ panel in the HUD can put any engine first without editing this file.
+chain = ["claude-cli", "sdk", "hermes", "local"]
+mode = "cli"                      # legacy; only used when `chain` is absent
+sdk_model = "claude-sonnet-5-5"   # Anthropic API path
+cli_model = "sonnet"              # claude CLI path ("sonnet" = the latest Sonnet)
+# hermes_provider = "lmstudio"    # pin the Hermes engine to a provider / model
+# hermes_model = "qwen/qwen3.6-35b-a3b"
+local_base_url = "http://127.0.0.1:1234/v1"
+# local_model = "qwen/qwen3.6-35b-a3b"
+timeout = 180                     # seconds before a stuck CLI answer is abandoned
+
+[alerts]
+# Which alerts JARVIS says out loud: "none", "critical" or "all". Every alert
+# also appears in the bell panel; mute any one of them there for good.
+speak = "critical"
+
+[shield]
+# Project snapshots (zip backups) taken from the Projects view.
+# dir = 'C:\Users\markj\Documents\JARVIS Backups'
+keep = 5              # snapshots kept per project
+max_file_mb = 50      # bigger files are left out (and listed in _SNAPSHOT.txt)
+max_total_mb = 2000   # a snapshot that would exceed this is abandoned
+fresh_days = 7        # a snapshot newer than this counts as "covered"
+
+[automations]
+# Scheduled tasks shown under Systems → Automations: anything outside \Microsoft\
+# whose command points into a project root (or names a project) is included.
+# include = ["FanControl"]   # extra task names (substring match)
+# exclude = []
+
+[updates]
+auto_check = true     # check winget / npm / uv in the background every few hours
+
+# Your own launcher tiles (Overview → Apps, the command palette, "open X"):
+# [[apps]]
+# id = "notebook"
+# name = "Research notebook"
+# icon = "🧪"
+# group = "Custom"
+# path = 'C:\Users\markj\Documents\PythonProjects\Notebook'   # launched like a project
+# port = 8899                                                 # optional: live status + app window
 
 [obsidian]
 vault = 'C:\Users\markj\Documents\Obsidian Vault'
@@ -50,17 +99,28 @@ roots = [
 # Per-project overrides (keyed by folder name). Paths are relative to the project.
 #   docs_path = where to draw supporting documents from (instead of the root)
 #   run_path  = the sub-folder whose app the top-level "Run" button launches
+#   launch    = clicking the project's node on the map opens this app directly
+#               ("quantfin" / "quantflow") instead of the project detail modal
 [projects.overrides.QuantFin]
 docs_path = "trading_architecture/notebooks"
 run_path = "trading_architecture"
+launch = "quantfin"
+
+[projects.overrides."Pantry App"]
+# Clicking the Pantry node opens the app directly in its own native window.
+launch = "pantry"
 
 [library]
 # Folders of launchable shortcuts (games, emulators, apps) surfaced as their own
 # branches on the ecosystem map. Each top-level .lnk/.url/.exe becomes a node you
 # can click to launch. Add or remove roots freely.
+#   opens = "gamecenter" / "emucenter" / "moviecenter"  makes the root a single
+#   node that opens that Center app (see [connectors]) instead of expanding to
+#   raw shortcuts.
 roots = [
-    { name = "PC Games", path = 'D:\PC Games' },
-    { name = "Emulators", path = 'D:\Emulators' },
+    { name = "PC Games", path = 'D:\PC Games', opens = "gamecenter" },
+    { name = "Emulators", path = 'D:\Emulators', opens = "emucenter" },
+    { name = "Movies & Shows", path = 'F:\Movies', opens = "moviecenter" },
 ]
 
 [server]
@@ -82,6 +142,14 @@ hermes_path = 'C:\Users\markj\source\repos\hermes-skills'
 # roots (a "Hermes" folder); set it explicitly here to override.
 hermes_chat_url = "http://127.0.0.1:7718"
 # hermes_chat_path = 'C:\Users\markj\Documents\PythonProjects\Hermes'
+# Game Center / Emu Center / Movie Center — standalone library launcher apps. A
+# [library] root flagged `opens = "gamecenter"`, `"emucenter"` or `"moviecenter"`
+# launches the matching app (its own server + window) when clicked on the
+# ecosystem map. Folders are auto-found ("GameCenter" / "EmuCenter" /
+# "MovieCenter" under a project root); set explicitly here to override.
+# gamecenter_path = 'C:\Users\markj\Documents\PythonProjects\GameCenter'
+# emucenter_path = 'C:\Users\markj\Documents\PythonProjects\EmuCenter'
+# moviecenter_path = 'C:\Users\markj\Documents\PythonProjects\MovieCenter'
 
 [rag]
 # Vault memory: local RAG over your notes. Markdown from `roots` is chunked and

@@ -126,28 +126,14 @@ def scan_packages() -> list[dict[str, Any]]:
 
 
 def system_stats() -> dict[str, Any]:
-    """Live CPU / memory / disk for the HUD gauges."""
+    """Live CPU / memory / GPU / disk reading (see telemetry.py). The sampler
+    measures in the background, so this never blocks a request the way the old
+    `cpu_percent(interval=0.15)` call did — and it no longer reads JARVIS's own
+    scan burst as "CPU load"."""
     try:
-        import psutil
+        from .telemetry import sampler
 
-        vm = psutil.virtual_memory()
-        disk = psutil.disk_usage("C:\\" if sys.platform == "win32" else "/")
-        boot = psutil.boot_time()
-        import time
-
-        uptime_s = int(time.time() - boot)
-        return {
-            "ok": True,
-            "cpu_pct": psutil.cpu_percent(interval=0.15),
-            "cpu_cores": psutil.cpu_count(logical=True),
-            "mem_pct": vm.percent,
-            "mem_used_gb": round(vm.used / 1e9, 1),
-            "mem_total_gb": round(vm.total / 1e9, 1),
-            "disk_pct": disk.percent,
-            "disk_free_gb": round(disk.free / 1e9, 1),
-            "disk_total_gb": round(disk.total / 1e9, 1),
-            "uptime_h": round(uptime_s / 3600, 1),
-        }
+        return sampler.snapshot()
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

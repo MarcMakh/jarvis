@@ -16,8 +16,15 @@ def build(state: dict[str, Any]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     links: list[dict[str, str]] = []
 
-    def add(nid: str, label: str, group: str, r: float = 6.0, drill: dict | None = None) -> str:
-        nodes.append({"id": nid, "label": label, "group": group, "r": r, "drill": drill})
+    # Which registered apps are up right now -> a live ring on their nodes.
+    running = {a["id"] for a in state.get("apps", []) if a.get("running")}
+    app_by_path = {str(a.get("path") or "").lower(): a["id"] for a in state.get("apps", [])
+                   if a.get("path")}
+
+    def add(nid: str, label: str, group: str, r: float = 6.0, drill: dict | None = None,
+            live: bool = False) -> str:
+        nodes.append({"id": nid, "label": label, "group": group, "r": r, "drill": drill,
+                      "live": live})
         return nid
 
     def link(a: str, b: str) -> None:
@@ -47,6 +54,7 @@ def build(state: dict[str, Any]) -> dict[str, Any]:
         "ai" if online else "absent",
         14.0,
         {"kind": "conn", "name": "hermes_chat"},
+        live=online,
     )
     link(core, hchat)
     for p in hc.get("providers", []):
@@ -100,18 +108,39 @@ def build(state: dict[str, Any]) -> dict[str, Any]:
                   {"kind": "tool", "name": t["name"]})
         link(tool_hub, nid)
 
-    # Projects
+    # Projects. An override `launch = "quantfin"` in [projects.overrides.<Name>]
+    # makes clicking the node open that app directly (like the Game Center node
+    # does) instead of the project detail modal.
+    from .util import load_config
+
+    overrides = (load_config().get("projects", {}) or {}).get("overrides", {}) or {}
     proj_hub = add("hub:projects", "Projects", "hub", 10.0)
     link(core, proj_hub)
-    for p in state.get("projects", [])[:16]:
-        nid = add(f"proj:{p['path']}", p["name"], "project", 8.0,
-                  {"kind": "project", "path": p["path"]})
+    for p in state.get("projects", [])[:24]:
+        app = (overrides.get(p["name"]) or {}).get("launch")
+        drill = ({"kind": "app", "id": app, "name": p["name"], "path": p["path"]}
+                 if app else {"kind": "project", "path": p["path"]})
+        app_id = app or app_by_path.get(str(p["path"]).lower())
+        nid = add(f"proj:{p['path']}", p["name"], "project", 8.0, drill,
+                  live=bool(app_id and app_id in running))
         link(proj_hub, nid)
 
-    # Library (games, emulators) — each shortcut is a launchable leaf node.
+    # Library (games, emulators). A root flagged `opens = "gamecenter"` or
+    # `opens = "emucenter"` in config becomes a single launcher node for that
+    # Center app instead of expanding to raw shortcuts; every other root lists
+    # its launchable shortcuts as leaves.
     from . import library
+    from .launcher import emucenter_dir, gamecenter_dir, moviecenter_dir
 
+    centers = {"gamecenter": gamecenter_dir, "emucenter": emucenter_dir,
+               "moviecenter": moviecenter_dir}
     for lib in library.scan():
+        opens = lib.get("opens")
+        if opens in centers and centers[opens]() is not None:
+            gc = add(f"lib:{lib['name']}", lib["name"], opens, 12.0,
+                     {"kind": "app", "id": opens, "name": lib["name"]}, live=opens in running)
+            link(core, gc)
+            continue
         emu = "emu" in lib["name"].lower()
         hub = add(f"lib:{lib['name']}", f"{lib['name']} ({lib['count']})", "hub", 11.0,
                   {"kind": "library", "name": lib["name"]})
